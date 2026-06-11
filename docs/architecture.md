@@ -35,9 +35,14 @@ backfill or an incremental pull from each series' latest stored date. (Built in 
 It is gitignored — the repo ships code, not data — so anyone can rebuild it from the
 public sources.
 
-**Analysis core (`src/core/`).** Pure functions model a synthetic pool of loans by
-note-rate cohort and compute, at each candidate rate trigger, how many loans clear the
-net-tangible-benefit and recoupment tests. This is the trigger ladder. (Built in Step 3.)
+**Analysis core (`src/core/`).** A seeded generator (`pool`) builds a synthetic book
+of loans and persists it to SQLite. Pure functions then judge each loan through three
+independent layers — `rules_va`/`rules_fha` (agency-clear), `economics`
+(economically-clear), and `callclear` (call-clear) — backed by `amort` and a versioned
+`mip` schedule. `ladder` sweeps candidate trigger rates and counts how many loans clear
+agency + economic tests at each rung, carrying call-clear flags alongside; `report`
+prints it. Rules implement the contract in [docs/domain-rules.md](domain-rules.md) and
+never invent regulation. (Built in Step 3.)
 
 **UI (`src/app/`).** A Streamlit dashboard renders current rates and the trigger ladder
 so a user can see, at a glance, where refinance opportunity opens up. (Built in Step 4.)
