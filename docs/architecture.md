@@ -44,8 +44,12 @@ agency + economic tests at each rung, carrying call-clear flags alongside; `repo
 prints it. Rules implement the contract in [docs/domain-rules.md](domain-rules.md) and
 never invent regulation. (Built in Step 3.)
 
-**UI (`src/app/`).** A Streamlit dashboard renders current rates and the trigger ladder
-so a user can see, at a glance, where refinance opportunity opens up. (Built in Step 4.)
+**UI (`src/app/`).** A Streamlit dashboard (`dashboard.py`) renders current rates,
+trend chart, and the interactive trigger ladder so a user can see, at a glance, where
+refinance opportunity opens up. It is a thin presentation layer: every number comes
+from the analysis core and from tested read-only helpers in `data_access.py` — no rule
+logic, economics, or SQL lives in the UI. Sidebar assumptions recompute the ladder live
+through the core, cached for responsiveness. (Built in Step 4.)
 
 **AI + evals.** The Anthropic API turns the day's computed figures into a plain-English
 morning brief. An eval harness (`evals/`) checks every number in the brief against the

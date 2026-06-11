@@ -15,7 +15,7 @@ Mortgage professionals watch interest rates every day, but watching a rate move 
 
 ## Screenshot
 
-*Dashboard screenshot lands in Step 4.*
+![Dashboard](docs/screenshot.png)
 
 ## Architecture
 
@@ -80,6 +80,19 @@ Then run the analysis core to generate the synthetic pool and print the trigger 
 python -m src.core.report
 ```
 
+### Running the dashboard
+
+After ingesting data, launch the interactive desk:
+
+```bash
+python -m src.data.ingest --backfill-years 5   # once, to populate the database
+streamlit run src/app/dashboard.py
+```
+
+The dashboard reads the SQLite data and computes everything through the core modules —
+adjust the assumptions in the sidebar (cost %, break-even threshold, pool seed) and
+the trigger ladder recomputes live.
+
 ## Glossary
 
 - **Note rate** — the interest rate written on the borrower's existing loan; what a refinance would replace.
@@ -97,7 +110,7 @@ All data comes from **public sources only** — FRED (Federal Reserve) and Fredd
 - [x] **Step 1** — Repo skeleton, README, license, structure
 - [x] **Step 2** — Data pipeline (FRED + PMMS ingest into SQLite)
 - [x] **Step 3** — Analysis core (NTB, recoupment, trigger ladder)
-- [ ] **Step 4** — Streamlit dashboard + screenshot
+- [x] **Step 4** — Streamlit dashboard + screenshot
 - [ ] **Step 5** — AI morning brief + eval harness
 - [ ] **Step 6** — Live deployment + link
 
