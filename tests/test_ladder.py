@@ -47,6 +47,35 @@ def test_new_rate_preserves_program_basis():
     assert ladder.new_rate_for(fha, 6.000, 6.131, 6.284) == round(6.000 + (6.284 - 6.131), 3)
 
 
+def test_newly_eligible_from_cumulative():
+    assert ladder.newly_eligible_from_cumulative([3, 3, 7, 10]) == [3, 0, 4, 3]
+    assert ladder.newly_eligible_from_cumulative([]) == []
+    cumulative = [2, 5, 5, 9]
+    deltas = ladder.newly_eligible_from_cumulative(cumulative)
+    assert deltas[0] == cumulative[0]  # first rung delta == its cumulative
+    assert sum(deltas) == cumulative[-1]  # deltas sum to the final cumulative
+
+
+def test_build_ladder_deltas_and_program_split(tmp_path):
+    conn = _db_with_rates(tmp_path)
+    rungs, _, _ = ladder.build_ladder(pool.generate_pool(n=300), conn)
+    conn.close()
+    assert rungs[0].newly_eligible == rungs[0].cumulative_count
+    assert sum(r.newly_eligible for r in rungs) == rungs[-1].cumulative_count
+    for rung in rungs:
+        assert rung.eligible_va + rung.eligible_fha == rung.eligible_count
+
+
+def test_threshold_threading_tightens_eligibility(tmp_path):
+    conn = _db_with_rates(tmp_path)
+    loans = pool.generate_pool(n=300)
+    strict, _, _ = ladder.build_ladder(loans, conn, threshold_months=1)
+    loose, _, _ = ladder.build_ladder(loans, conn, threshold_months=48)
+    conn.close()
+    # A 1-month break-even is essentially unreachable, so far fewer loans clear.
+    assert strict[-1].eligible_count < loose[-1].eligible_count
+
+
 def test_missing_rates_raise(tmp_path):
     conn = db.connect(tmp_path / "empty.db")
     try:
