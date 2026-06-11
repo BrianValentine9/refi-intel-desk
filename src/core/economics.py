@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import math
 
+from dataclasses import dataclass
+
 from . import amort, mip
 from .config import assumptions as A
 from .config.mip_schedule import fha_mip_rates
@@ -22,15 +24,36 @@ def _default_new_product(loan: Loan) -> str:
     return "fixed"
 
 
-def build_scenario(
+@dataclass(frozen=True)
+class LoanBase:
+    """The rate-independent half of a refi scenario for one loan.
+
+    Everything here is fixed for a loan regardless of the trigger rate, so the
+    ladder computes it once and reuses it across every rung (only new_monthly_PI
+    changes with the rate).
+    """
+
+    new_product_type: str
+    new_term_months: int
+    new_balance: float
+    old_monthly_PI: float
+    old_monthly_MIP: float
+    new_monthly_MIP: float
+    old_annual_mip_rate: float
+    new_annual_mip_rate: float
+    agency_recoupment_cost: float
+    economic_total_cost: float
+    excluded_prepaids_escrow_cost: float
+
+
+def precompute_base(
     loan: Loan,
-    new_note_rate: float,
     *,
     new_product_type: str | None = None,
     new_term_months: int | None = None,
     cost_pct: float = A.RECOUPMENT_COST_PCT_BASE,
-) -> Scenario:
-    """Price one refi scenario for ``loan`` at ``new_note_rate``.
+) -> LoanBase:
+    """Compute the rate-independent parts of a refi scenario once.
 
     Financing rules (domain-rules §2.1.6, §2.2.2, §2.2.10):
       - VA: funding fee (0.5% unless exempt) is financed into the new balance.
@@ -44,8 +67,7 @@ def build_scenario(
 
     if loan.program == "VA":
         old_annual_mip_rate = new_annual_mip_rate = 0.0
-        funding_fee = 0.0 if loan.va_funding_fee_exempt else loan.balance * A.VA_IRRRL_FUNDING_FEE_RATE
-        financed_fee = funding_fee
+        financed_fee = 0.0 if loan.va_funding_fee_exempt else loan.balance * A.VA_IRRRL_FUNDING_FEE_RATE
         new_balance = loan.balance + financed_fee
         old_monthly_MIP = new_monthly_MIP = 0.0
     elif loan.program == "FHA":
@@ -63,8 +85,6 @@ def build_scenario(
     else:
         raise ValueError(f"Unknown program: {loan.program!r}")
 
-    new_monthly_PI = amort.monthly_pi(new_balance, new_note_rate, new_term_months)
-
     # Three separate cost buckets (domain-rules §3).
     agency_recoupment_cost = round(loan.balance * cost_pct, 2)
     excluded_prepaids_escrow_cost = round(loan.balance * A.PREPAIDS_ESCROW_PCT, 2)
@@ -72,14 +92,11 @@ def build_scenario(
         agency_recoupment_cost + excluded_prepaids_escrow_cost + financed_fee, 2
     )
 
-    return Scenario(
-        loan=loan,
-        new_note_rate=new_note_rate,
+    return LoanBase(
         new_product_type=new_product_type,
         new_term_months=new_term_months,
         new_balance=round(new_balance, 2),
         old_monthly_PI=old_monthly_PI,
-        new_monthly_PI=new_monthly_PI,
         old_monthly_MIP=old_monthly_MIP,
         new_monthly_MIP=new_monthly_MIP,
         old_annual_mip_rate=old_annual_mip_rate,
@@ -88,6 +105,42 @@ def build_scenario(
         economic_total_cost=economic_total_cost,
         excluded_prepaids_escrow_cost=excluded_prepaids_escrow_cost,
     )
+
+
+def scenario_at_rate(loan: Loan, base: LoanBase, new_note_rate: float) -> Scenario:
+    """Assemble a Scenario from a precomputed base at a specific new note rate."""
+    new_monthly_PI = amort.monthly_pi(base.new_balance, new_note_rate, base.new_term_months)
+    return Scenario(
+        loan=loan,
+        new_note_rate=new_note_rate,
+        new_product_type=base.new_product_type,
+        new_term_months=base.new_term_months,
+        new_balance=base.new_balance,
+        old_monthly_PI=base.old_monthly_PI,
+        new_monthly_PI=new_monthly_PI,
+        old_monthly_MIP=base.old_monthly_MIP,
+        new_monthly_MIP=base.new_monthly_MIP,
+        old_annual_mip_rate=base.old_annual_mip_rate,
+        new_annual_mip_rate=base.new_annual_mip_rate,
+        agency_recoupment_cost=base.agency_recoupment_cost,
+        economic_total_cost=base.economic_total_cost,
+        excluded_prepaids_escrow_cost=base.excluded_prepaids_escrow_cost,
+    )
+
+
+def build_scenario(
+    loan: Loan,
+    new_note_rate: float,
+    *,
+    new_product_type: str | None = None,
+    new_term_months: int | None = None,
+    cost_pct: float = A.RECOUPMENT_COST_PCT_BASE,
+) -> Scenario:
+    """Price one refi scenario for ``loan`` at ``new_note_rate`` (convenience wrapper)."""
+    base = precompute_base(
+        loan, new_product_type=new_product_type, new_term_months=new_term_months, cost_pct=cost_pct
+    )
+    return scenario_at_rate(loan, base, new_note_rate)
 
 
 def lens_monthly_savings(scenario: Scenario) -> float:
