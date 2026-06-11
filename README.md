@@ -36,6 +36,22 @@ Public APIs (FRED, Freddie Mac PMMS)
 
 See [docs/architecture.md](docs/architecture.md) for a layer-by-layer description.
 
+## Domain model
+
+The analysis core judges every loan through **three independent layers** — kept
+separate on purpose, never collapsed into one "savings" number:
+
+1. **Agency-clear** — does the loan pass the formal VA IRRRL / FHA Streamline program
+   gates (seasoning, net tangible benefit, VA statutory recoupment, FHA combined-rate)?
+2. **Economically-clear** — is the refinance genuinely worth doing under house
+   break-even math (P&I for VA, P+I+MIP for FHA)?
+3. **Call-clear** — is the file executable and saleable, or blocked by hard/soft
+   blockers and unknowns that synthetic data can only flag, not resolve?
+
+The exact rules, thresholds, and formulas the code implements — and which decisions
+are program law versus synthetic/house assumptions — are documented in
+[docs/domain-rules.md](docs/domain-rules.md).
+
 ## Usage
 
 Set up the environment and add your free [FRED API key](https://fred.stlouisfed.org/docs/api/api_key.html):
@@ -58,6 +74,12 @@ python -m src.data.ingest
 
 Re-running either command is safe: ingest is idempotent and never duplicates rows.
 
+Then run the analysis core to generate the synthetic pool and print the trigger ladder:
+
+```bash
+python -m src.core.report
+```
+
 ## Glossary
 
 - **Note rate** — the interest rate written on the borrower's existing loan; what a refinance would replace.
@@ -74,7 +96,7 @@ All data comes from **public sources only** — FRED (Federal Reserve) and Fredd
 
 - [x] **Step 1** — Repo skeleton, README, license, structure
 - [x] **Step 2** — Data pipeline (FRED + PMMS ingest into SQLite)
-- [ ] **Step 3** — Analysis core (NTB, recoupment, trigger ladder)
+- [x] **Step 3** — Analysis core (NTB, recoupment, trigger ladder)
 - [ ] **Step 4** — Streamlit dashboard + screenshot
 - [ ] **Step 5** — AI morning brief + eval harness
 - [ ] **Step 6** — Live deployment + link
