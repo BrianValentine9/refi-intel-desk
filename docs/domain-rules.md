@@ -239,6 +239,30 @@ borrower-removal (FHA credit-qualifying), and VA funding-fee exemptions.
 - **VA comparison-statement** exhibit text was not retrievable; the 3-business-day /
   at-closing requirement is modeled as a documentation field without sample text.
 
+## 7a. Resolved clarifications (architect rulings, 2026-06-10)
+
+Where §7 was silent, these decisions were made by the architect and are now binding
+on the code. They are explicitly **synthetic-model choices**, not new regulation.
+
+- **FHA standard annual MIP.** Post-May 31, 2009 FHA loans use **1.75% UFMIP /
+  0.55% annual MIP** as a single synthetic stratum, stored in versioned config and
+  labeled a synthetic simplification. (0.55% is the current HUD value for the most
+  common 30-year stratum — base ≤ $726,200, LTV > 95%, effective 2023-03-20.) The
+  pre-May 31, 2009 special treatment (§2.2.10) remains separate. No property-value/
+  LTV tiering is modeled; the pool schema is unchanged.
+- **VA ARM→fixed NTB.** Satisfied when the new fixed rate is **lower than the old
+  ARM note rate** (any reduction). The source specifies thresholds only for
+  fixed→fixed and fixed→ARM (§2.1.4); ARM→fixed is treated as a tangible benefit by
+  interpretation, consistent with VA's general treatment of ARM→fixed.
+- **VA fixed→ARM extra constraints.** Only the **≥2.00% rate-drop** gate (§2.1.4) is
+  enforced. The additional discount-point/LTV constraints are acknowledged but **not
+  enforced**, because the source does not quantify them and the synthetic data
+  carries no discount-point detail. Documented as a simplification.
+- **FHA UFMIP refund credit.** Modeled with a **simplified declining schedule** in
+  config (refund share steps down from closing to zero by 36 months) for FHA-to-FHA
+  refis within 3 years — a synthetic simplification of HUD's actual refund table,
+  clearly labeled as such.
+
 ## 8. The one-sentence core
 
 A loan clears only when it is agency-clear under the exact program rule,
