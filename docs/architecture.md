@@ -24,9 +24,12 @@
 Federal Reserve (FRED) and the 30-year average mortgage rate from Freddie Mac's
 Primary Mortgage Market Survey (PMMS). No private, employer, or borrower data is used.
 
-**Ingest (`src/data/`).** Scheduled pulls fetch the latest values, normalize them into
-tidy records, and write them to SQLite. Raw responses are cached locally so a failed
-source or rate limit doesn't break a run. (Built in Step 2.)
+**Ingest (`src/data/`).** A `series_registry` names the tracked series (one source of
+truth). `fred_client` fetches observations from the FRED API — rate-limited, with retry
+and backoff, and storing FRED's `"."` missing-value marker as NULL rather than 0. `db`
+writes them to SQLite via `INSERT OR REPLACE` so re-running never duplicates rows, and
+`ingest` is the runnable entry point (`python -m src.data.ingest`) supporting a full
+backfill or an incremental pull from each series' latest stored date. (Built in Step 2.)
 
 **Storage (SQLite, `data/`).** A single local database holds the historical rate series.
 It is gitignored — the repo ships code, not data — so anyone can rebuild it from the
