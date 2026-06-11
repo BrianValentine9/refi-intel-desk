@@ -250,10 +250,13 @@ on the code. They are explicitly **synthetic-model choices**, not new regulation
   common 30-year stratum — base ≤ $726,200, LTV > 95%, effective 2023-03-20.) The
   pre-May 31, 2009 special treatment (§2.2.10) remains separate. No property-value/
   LTV tiering is modeled; the pool schema is unchanged.
-- **VA ARM→fixed NTB.** Satisfied when the new fixed rate is **lower than the old
-  ARM note rate** (any reduction). The source specifies thresholds only for
-  fixed→fixed and fixed→ARM (§2.1.4); ARM→fixed is treated as a tangible benefit by
-  interpretation, consistent with VA's general treatment of ARM→fixed.
+- **VA ARM→fixed NTB.** Moving from an ARM to a fixed rate is **itself** the net
+  tangible benefit (rate-risk elimination), so NTB passes **regardless of the new
+  rate** — including when the new fixed rate equals or exceeds the old ARM rate. The
+  economic protection is the statutory recoupment backstop (§2.1.5): if the new
+  monthly P&I is greater than or equal to the old, eligible fees must be **zero** for
+  the loan to be agency-clear. The source specifies explicit rate thresholds only for
+  fixed→fixed and fixed→ARM (§2.1.4).
 - **VA fixed→ARM extra constraints.** Only the **≥2.00% rate-drop** gate (§2.1.4) is
   enforced. The additional discount-point/LTV constraints are acknowledged but **not
   enforced**, because the source does not quantify them and the synthetic data

@@ -34,8 +34,12 @@ def _ntb_passes(loan: Loan, scenario: Scenario) -> bool:
     if old == "fixed" and new == "arm":
         return drop >= A.VA_NTB_FIXED_TO_ARM_DROP
     if old == "arm" and new == "fixed":
-        # Architect ruling §7a: any rate reduction is a tangible benefit.
-        return scenario.new_note_rate < loan.note_rate
+        # Architect ruling §7a (corrected): moving ARM->fixed is itself the
+        # tangible benefit (rate-risk elimination), so NTB passes regardless of
+        # rate — even when the new fixed rate equals or exceeds the old ARM rate.
+        # The recoupment backstop (§2.1.5) governs economics: if new P&I >= old
+        # P&I, eligible fees must be zero.
+        return True
     # ARM->ARM is unspecified in the source; require a real reduction.
     return drop > 0
 
