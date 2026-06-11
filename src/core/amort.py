@@ -17,22 +17,22 @@ def round_half_up(amount: float, places: str = "0.01") -> float:
 def monthly_pi(balance: float, annual_rate_pct: float, term_months: int) -> float:
     """Standard amortized monthly principal + interest payment.
 
-    ``annual_rate_pct`` is a percentage (e.g. 6.5 for 6.5%). Uses Decimal for
-    precision, then rounds half-up to cents. A 0% rate degrades to balance/term.
+    ``annual_rate_pct`` is a percentage (e.g. 6.5 for 6.5%). Computed in float for
+    speed (the ladder prices tens of thousands of scenarios), then rounded half-up
+    to cents so the reported payment is exact. A 0% rate degrades to balance/term.
     """
     if term_months <= 0:
         raise ValueError("term_months must be positive")
     if balance < 0:
         raise ValueError("balance must be non-negative")
 
-    principal = Decimal(str(balance))
-    monthly_rate = Decimal(str(annual_rate_pct)) / Decimal(1200)
     n = int(term_months)
+    monthly_rate = annual_rate_pct / 1200.0
 
     if monthly_rate == 0:
-        payment = principal / Decimal(n)
+        payment = balance / n
     else:
         growth = (1 + monthly_rate) ** n
-        payment = principal * monthly_rate * growth / (growth - 1)
+        payment = balance * monthly_rate * growth / (growth - 1)
 
-    return float(payment.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+    return round_half_up(payment)
