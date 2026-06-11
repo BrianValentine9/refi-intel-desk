@@ -15,9 +15,7 @@ Mortgage professionals watch interest rates every day, but watching a rate move 
 
 ## Screenshot
 
-![Dashboard](docs/screenshot.png)
-
-*(screenshot lands in Step 4)*
+*Dashboard screenshot lands in Step 4.*
 
 ## Architecture
 
@@ -38,6 +36,28 @@ Public APIs (FRED, Freddie Mac PMMS)
 
 See [docs/architecture.md](docs/architecture.md) for a layer-by-layer description.
 
+## Usage
+
+Set up the environment and add your free [FRED API key](https://fred.stlouisfed.org/docs/api/api_key.html):
+
+```bash
+python -m venv .venv && .venv/Scripts/activate   # Windows; use source .venv/bin/activate on macOS/Linux
+pip install -r requirements.txt
+cp .env.example .env                              # then edit .env and set FRED_API_KEY
+```
+
+Pull the public rate data into a local SQLite database (`data/refi.db`):
+
+```bash
+# One-time backfill of the last 5 years for every tracked series
+python -m src.data.ingest --backfill-years 5
+
+# Routine incremental pull — each series resumes from its latest stored date
+python -m src.data.ingest
+```
+
+Re-running either command is safe: ingest is idempotent and never duplicates rows.
+
 ## Glossary
 
 - **Note rate** — the interest rate written on the borrower's existing loan; what a refinance would replace.
@@ -53,7 +73,7 @@ All data comes from **public sources only** — FRED (Federal Reserve) and Fredd
 ## Roadmap
 
 - [x] **Step 1** — Repo skeleton, README, license, structure
-- [ ] **Step 2** — Data pipeline (FRED + PMMS ingest into SQLite)
+- [x] **Step 2** — Data pipeline (FRED + PMMS ingest into SQLite)
 - [ ] **Step 3** — Analysis core (NTB, recoupment, trigger ladder)
 - [ ] **Step 4** — Streamlit dashboard + screenshot
 - [ ] **Step 5** — AI morning brief + eval harness
