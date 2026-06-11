@@ -1,0 +1,8 @@
+# Refi Intelligence Desk — dark ledger-green theme with brass accents.
+[theme]
+base = "dark"
+primaryColor = "#D4A94E"          # brass
+backgroundColor = "#101915"        # ledger green
+secondaryBackgroundColor = "#16221C"
+textColor = "#E9E4D6"
+font = "monospace"
