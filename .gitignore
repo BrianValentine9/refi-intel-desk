@@ -35,3 +35,8 @@ htmlcov/
 Thumbs.db
 .vscode/
 .idea/
+
+# --- artifacts / secrets ---
+files.zip
+*.zip
+.streamlit/secrets.toml

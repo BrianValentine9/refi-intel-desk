@@ -13,7 +13,7 @@ def test_dashboard_imports_without_server():
     assert callable(module.main)
     for name in [
         "render_masthead", "render_metrics", "render_chart",
-        "render_ladder", "render_sidebar", "render_footer",
+        "render_ladder", "render_morning_brief", "render_sidebar", "render_footer",
     ]:
         assert hasattr(module, name), f"missing render helper: {name}"
 

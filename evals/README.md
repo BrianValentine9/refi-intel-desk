@@ -9,3 +9,13 @@ clearing net-tangible-benefit and recoupment at each trigger) exactly match the
 computed inputs, and that the brief makes no unsupported directional claims. The goal
 is a measurable accuracy bar, reported in the README, that proves the AI layer is
 grounded rather than decorative.
+
+## Run
+
+```bash
+# Template brief (no API key) + eval gate
+python -m evals.run_eval --mode template
+
+# From repo root after ingest populated data/refi.db
+pytest tests/test_brief_eval.py -q
+```

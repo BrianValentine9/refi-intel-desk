@@ -192,6 +192,43 @@ def render_footer() -> None:
                "No NMLS-regulated activity occurs in this software. Educational portfolio project.")
 
 
+def render_morning_brief(
+    as_of: str,
+    cost_pct: float,
+    threshold: int,
+    seed: int,
+    selected_trigger: float,
+) -> None:
+    """AI morning brief with eval gate — template fallback when no API key."""
+    from evals.verify import verify_brief
+    from src.brief.generate import generate_brief
+    from src.brief.snapshot import build_snapshot
+
+    st.subheader("Morning brief")
+    conn = da.connect()
+    try:
+        snapshot = build_snapshot(
+            conn,
+            cost_pct=cost_pct,
+            threshold_months=threshold,
+            seed=seed,
+            selected_trigger=selected_trigger,
+        )
+        brief, source = generate_brief(snapshot, mode="auto")
+        result = verify_brief(brief, snapshot)
+    finally:
+        conn.close()
+
+    badge = "Eval PASS" if result.passed else "Eval FAIL"
+    st.caption(f"Source: {source} | {badge} | {result.summary()}")
+    if result.errors:
+        for err in result.errors:
+            st.error(err)
+    for warn in result.warnings:
+        st.warning(warn)
+    st.markdown(brief)
+
+
 def main() -> None:
     st.set_page_config(page_title="Refi Intelligence Desk", layout="wide")
     conn = da.connect()
@@ -211,7 +248,14 @@ def main() -> None:
 
     render_metrics(as_of)
     render_chart(as_of, st.session_state["selected_trigger"])
-    render_ladder(rungs)
+    selected_rung = render_ladder(rungs)
+    render_morning_brief(
+        as_of,
+        cost_pct,
+        threshold,
+        seed,
+        selected_rung.trigger_rate,
+    )
     render_footer()
 
 

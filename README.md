@@ -93,6 +93,31 @@ The dashboard reads the SQLite data and computes everything through the core mod
 adjust the assumptions in the sidebar (cost %, break-even threshold, pool seed) and
 the trigger ladder recomputes live.
 
+### Morning brief + eval
+
+Generate a grounded brief from the latest DB figures (template mode when no API key):
+
+```bash
+python -m src.brief.generate --mode template
+python -m evals.run_eval --mode template
+```
+
+With `ANTHROPIC_API_KEY` in `.env`, `--mode auto` or `--mode llm` calls Claude; the eval
+harness verifies every quoted rate, count, and median against the snapshot before display.
+
+## Live demo (Step 6)
+
+Deploy to [Streamlit Community Cloud](https://share.streamlit.io/):
+
+1. **Main file:** `streamlit_app.py`
+2. **Secrets:** `FRED_API_KEY`, `ANTHROPIC_API_KEY` (see `.streamlit/secrets.toml.example`)
+3. **First boot:** run ingest once (Cloud shell or local) so `data/refi.db` exists, or
+   add a scheduled job to `python -m src.data.ingest` daily.
+
+**Live URL:** _Brian deploys and pins here._
+
+Without keys the desk still runs; the morning brief falls back to the deterministic template.
+
 ## Glossary
 
 - **Note rate** — the interest rate written on the borrower's existing loan; what a refinance would replace.
@@ -111,8 +136,8 @@ All data comes from **public sources only** — FRED (Federal Reserve) and Fredd
 - [x] **Step 2** — Data pipeline (FRED + PMMS ingest into SQLite)
 - [x] **Step 3** — Analysis core (NTB, recoupment, trigger ladder)
 - [x] **Step 4** — Streamlit dashboard + screenshot
-- [ ] **Step 5** — AI morning brief + eval harness
-- [ ] **Step 6** — Live deployment + link
+- [x] **Step 5** — AI morning brief + eval harness
+- [ ] **Step 6** — Live deployment + link (deploy pending; `streamlit_app.py` ready)
 
 ## About
 
