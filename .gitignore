@@ -8,6 +8,7 @@ _incoming/
 # --- Local data (SQLite + cached pulls) ---
 data/*.db
 data/*.sqlite*
+!data/seed.db
 data/cache/
 
 # --- Python ---

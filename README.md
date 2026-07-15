@@ -107,16 +107,23 @@ harness verifies every quoted rate, count, and median against the snapshot befor
 
 ## Live demo (Step 6)
 
-Deploy to [Streamlit Community Cloud](https://share.streamlit.io/):
+**Live URL:** _pin after deploy — typically `https://refi-intel-desk.streamlit.app`_
 
-1. **Main file:** `streamlit_app.py`
-2. **Secrets:** `FRED_API_KEY`, `ANTHROPIC_API_KEY` (see `.streamlit/secrets.toml.example`)
-3. **First boot:** run ingest once (Cloud shell or local) so `data/refi.db` exists, or
-   add a scheduled job to `python -m src.data.ingest` daily.
+Deploy once (about five minutes):
 
-**Live URL:** _Brian deploys and pins here._
+1. Open [share.streamlit.io](https://share.streamlit.io/) → sign in with GitHub → **Create app**.
+2. **Repository:** `BrianValentine9/refi-intel-desk` · **Branch:** `main` · **Main file:** `streamlit_app.py`
+3. **Advanced settings → Python:** `3.14` (matches the pinned deps in `requirements.txt`)
+4. **Secrets** (TOML — see `.streamlit/secrets.toml.example`):
 
-Without keys the desk still runs; the morning brief falls back to the deterministic template.
+   ```toml
+   FRED_API_KEY = "…"
+   ANTHROPIC_API_KEY = "…"
+   ```
+
+5. Click **Deploy**. The app ships with `data/seed.db` (public FRED history), so the desk
+   loads immediately. With `FRED_API_KEY` set it can refresh from the live feed; without
+   Anthropic the morning brief uses the deterministic template (eval still passes).
 
 ## Glossary
 
@@ -137,7 +144,7 @@ All data comes from **public sources only** — FRED (Federal Reserve) and Fredd
 - [x] **Step 3** — Analysis core (NTB, recoupment, trigger ladder)
 - [x] **Step 4** — Streamlit dashboard + screenshot
 - [x] **Step 5** — AI morning brief + eval harness
-- [ ] **Step 6** — Live deployment + link (deploy pending; `streamlit_app.py` ready)
+- [ ] **Step 6** — Live deployment + link (deploy-ready: seed DB + Cloud boot; pin URL after share.streamlit.io)
 
 ## About
 

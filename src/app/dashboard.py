@@ -12,7 +12,7 @@ from __future__ import annotations
 import plotly.graph_objects as go
 import streamlit as st
 
-from src.app import data_access as da
+from src.app import bootstrap, data_access as da
 from src.core import ladder, pool
 
 # Design language (CC-BRIEF-04).
@@ -24,6 +24,10 @@ OPPORTUNITY = "#6BBF8A"  # rates falling
 TREASURY_HUE = "#7A8B82"  # subdued context
 
 INGEST_CMD = "python -m src.data.ingest --backfill-years 5"
+SECRETS_HINT = (
+    "On Streamlit Community Cloud, add FRED_API_KEY under Advanced settings -> Secrets "
+    "(see .streamlit/secrets.toml.example)."
+)
 
 _METRIC_SPEC = [
     (da.TREASURY, "10-Yr Treasury"),
@@ -231,14 +235,15 @@ def render_morning_brief(
 
 def main() -> None:
     st.set_page_config(page_title="Refi Intelligence Desk", layout="wide")
-    conn = da.connect()
-    ready, as_of = da.database_ready(conn), da.as_of_date(conn)
-    conn.close()
+    bootstrap.apply_streamlit_secrets()
+    with st.spinner("Loading rate data…"):
+        ready, as_of = bootstrap.ensure_database()
 
     render_masthead(as_of)
     if not ready:
         st.error("No rate data found in the database. Run the ingest command first:")
         st.code(INGEST_CMD, language="bash")
+        st.info(SECRETS_HINT)
         st.stop()
 
     cost_pct, threshold, seed = render_sidebar()
