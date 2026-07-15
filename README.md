@@ -1,10 +1,12 @@
-# refi-intel-desk
+# Trigger Ladder
 
 **Mortgage refi opportunity dashboard — public rate data, trigger-ladder modeling, AI-generated morning briefs.** Python / Streamlit / SQLite / Anthropic API.
 
+*(Repo slug: `refi-intel-desk` — product name is Trigger Ladder.)*
+
 ## The problem
 
-Mortgage professionals watch interest rates every day, but watching a rate move isn't the same as knowing what to *do* about it. The question that actually matters is: at what rate does a real book of loans become worth refinancing? Answering that means running each loan against regulatory tests — does the borrower get a real benefit, and do they recoup their closing costs in a reasonable time? `refi-intel-desk` turns daily public rate movement into an actionable signal: the rate trigger at which a modeled pool of VA and FHA loans clears those tests.
+Mortgage professionals watch interest rates every day, but watching a rate move isn't the same as knowing what to *do* about it. The question that actually matters is: at what rate does a real book of loans become worth refinancing? Answering that means running each loan against regulatory tests — does the borrower get a real benefit, and do they recoup their closing costs in a reasonable time? Trigger Ladder turns daily public rate movement into an actionable signal: the rate trigger at which a modeled pool of VA and FHA loans clears those tests.
 
 ## What it does
 
@@ -15,7 +17,7 @@ Mortgage professionals watch interest rates every day, but watching a rate move 
 
 ## Screenshot
 
-![Dashboard](docs/screenshot.png)
+![Trigger Ladder dashboard](docs/screenshot.png)
 
 ## Architecture
 
@@ -107,12 +109,13 @@ harness verifies every quoted rate, count, and median against the snapshot befor
 
 ## Live demo (Step 6)
 
-**Live URL:** _pin after deploy — typically `https://refi-intel-desk.streamlit.app`_
+**Live URL:** _pin after deploy — use subdomain `trigger-ladder` → `https://trigger-ladder.streamlit.app`_
 
 Deploy once (about five minutes):
 
 1. Open [share.streamlit.io](https://share.streamlit.io/) → sign in with GitHub → **Create app**.
 2. **Repository:** `BrianValentine9/refi-intel-desk` · **Branch:** `main` · **Main file:** `streamlit_app.py`
+   · **App URL / subdomain:** `trigger-ladder`
 3. **Advanced settings → Python:** `3.14` (matches the pinned deps in `requirements.txt`)
 4. **Secrets** (TOML — see `.streamlit/secrets.toml.example`):
 

@@ -83,7 +83,7 @@ def main(argv: list[str] | None = None) -> None:
         if not economics.economically_clear(scenario).clear:
             legacy_fail_l2 += 1
 
-    print("refi-intel-desk - trigger ladder")
+    print("Trigger Ladder")
     print(f"as-of {A.AS_OF_DATE.isoformat()}  |  seed {args.seed}")
     print(f"current market: VA {current_va:.3f}%  FHA {current_fha:.3f}%  (latest DB index)\n")
     _print_ladder(rungs)

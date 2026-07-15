@@ -1,4 +1,4 @@
-"""Refi Intelligence Desk — Streamlit dashboard (thin presentation layer).
+"""Trigger Ladder — Streamlit dashboard (thin presentation layer).
 
 All numbers come from src/core and src/app.data_access; this file holds zero rule
 logic, economics, or SQL. Streamlit calls are confined to main() and the render_*
@@ -78,7 +78,7 @@ def _ladder(cost_pct: float, threshold: int, seed: int, as_of: str):
 def render_masthead(as_of: str | None) -> None:
     st.markdown(
         f"<h1 style='color:{BRASS};font-family:monospace;letter-spacing:3px;margin-bottom:0'>"
-        "REFI INTELLIGENCE DESK</h1>",
+        "TRIGGER LADDER</h1>",
         unsafe_allow_html=True,
     )
     st.caption("VA IRRRL · FHA Streamline opportunity monitor — public data, modeled pools")
@@ -234,7 +234,7 @@ def render_morning_brief(
 
 
 def main() -> None:
-    st.set_page_config(page_title="Refi Intelligence Desk", layout="wide")
+    st.set_page_config(page_title="Trigger Ladder", layout="wide")
     bootstrap.apply_streamlit_secrets()
     with st.spinner("Loading rate data…"):
         ready, as_of = bootstrap.ensure_database()
