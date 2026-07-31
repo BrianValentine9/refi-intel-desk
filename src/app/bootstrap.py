@@ -1,14 +1,20 @@
-"""Cloud/local boot helpers — secrets bridge and first-run database ensure.
+"""Cloud/local boot helpers - secrets bridge, first-run database ensure, and a
+staleness refresh.
 
 Streamlit Community Cloud does not ship a populated SQLite file (local DBs are
-gitignored). This module copies the committed seed when present, then optionally
-refreshes from FRED when a key is available via env or ``st.secrets``.
+gitignored). This module copies the committed seed when present, then keeps the
+data current: once a ready database exists, if its latest observation is more than
+a few days old and a FRED key is available, it runs a small incremental ingest.
+The refresh fails open - any error leaves the existing data in place and the
+"As of" caption stays truthful.
 """
 
 from __future__ import annotations
 
 import os
 import shutil
+import time
+from datetime import date
 from pathlib import Path
 
 from src.app import data_access as da
@@ -17,6 +23,14 @@ from src.data.series_registry import all_series_ids
 
 SEED_DB_PATH = Path("data") / "seed.db"
 SECRET_KEYS = ("FRED_API_KEY", "ANTHROPIC_API_KEY")
+
+# Refresh policy. Rates are business-daily, so a gap of up to 3 calendar days
+# (a Friday observation still being latest on Monday) is normal, not stale.
+STALE_AFTER_DAYS = 3
+# At most one refresh attempt per container per few hours, so Streamlit reruns do
+# not stampede FRED. Module-level state resets on container restart, which is fine.
+REFRESH_MIN_INTERVAL_SEC = 3 * 60 * 60
+_last_refresh_attempt: float | None = None
 
 
 def apply_streamlit_secrets() -> None:
@@ -28,7 +42,7 @@ def apply_streamlit_secrets() -> None:
             if key in st.secrets and not os.environ.get(key):
                 os.environ[key] = str(st.secrets[key]).strip()
     except Exception:
-        # Local CLI / missing secrets.toml — dotenv already covers that path.
+        # Local CLI / missing secrets.toml - dotenv already covers that path.
         return
 
 
@@ -43,34 +57,76 @@ def _copy_seed_if_needed(path: Path) -> bool:
     return True
 
 
-def ensure_database(*, backfill_years: int = 5) -> tuple[bool, str | None]:
-    """Make sure the working DB has the required series.
+def _is_stale(as_of: str | None) -> bool:
+    """True when the latest observation is more than STALE_AFTER_DAYS old."""
+    if not as_of:
+        return False
+    try:
+        observed = date.fromisoformat(as_of[:10])
+    except ValueError:
+        return False
+    return (date.today() - observed).days > STALE_AFTER_DAYS
 
-    Order: use existing DB → copy seed → ingest from FRED if keyed.
-    Returns ``(ready, as_of)``.
+
+def _refresh_throttled() -> bool:
+    """True when a refresh was attempted within REFRESH_MIN_INTERVAL_SEC."""
+    if _last_refresh_attempt is None:
+        return False
+    return (time.monotonic() - _last_refresh_attempt) < REFRESH_MIN_INTERVAL_SEC
+
+
+def _maybe_refresh_stale(path: Path, as_of: str | None) -> None:
+    """Incremental FRED pull when the working DB is stale, keyed, and not throttled.
+
+    Fails open: the throttle marker is set before the pull, and any ingest error is
+    swallowed so the app keeps serving the existing data unchanged.
     """
-    path = da.db_path()
-    conn = da.connect()
-    try:
-        if da.database_ready(conn):
-            return True, da.as_of_date(conn)
-    finally:
-        conn.close()
-
-    _copy_seed_if_needed(path)
-    conn = da.connect()
-    try:
-        if da.database_ready(conn):
-            return True, da.as_of_date(conn)
-    finally:
-        conn.close()
-
+    global _last_refresh_attempt
+    if not _is_stale(as_of):
+        return
     if not os.environ.get("FRED_API_KEY"):
-        return False, None
+        return
+    if _refresh_throttled():
+        return
+    _last_refresh_attempt = time.monotonic()
+    try:
+        # Incremental: each series resumes from its latest stored date, so the pull is small.
+        ingest.run(all_series_ids(), db_path=path)
+    except Exception:
+        # Fail open: serve the existing data unchanged.
+        return
 
-    ingest.run(all_series_ids(), backfill_years=backfill_years, db_path=path)
+
+def _ready_as_of() -> tuple[bool, str | None]:
+    """Open the working DB and report ``(database_ready, as_of_date)``."""
     conn = da.connect()
     try:
         return da.database_ready(conn), da.as_of_date(conn)
     finally:
         conn.close()
+
+
+def ensure_database(*, backfill_years: int = 5) -> tuple[bool, str | None]:
+    """Make sure the working DB has the required series and is reasonably current.
+
+    Order: use existing DB, else copy seed, else ingest from FRED if keyed. Once a
+    ready DB exists, a stale-and-keyed database gets a small incremental refresh.
+    Returns ``(ready, as_of)``.
+    """
+    path = da.db_path()
+
+    ready, as_of = _ready_as_of()
+    if not ready:
+        _copy_seed_if_needed(path)
+        ready, as_of = _ready_as_of()
+
+    if not ready:
+        # No existing DB and no usable seed: first-run ingest only if keyed.
+        if not os.environ.get("FRED_API_KEY"):
+            return False, None
+        ingest.run(all_series_ids(), backfill_years=backfill_years, db_path=path)
+        return _ready_as_of()
+
+    # Ready DB in hand. Refresh it if the data has gone stale (fail open).
+    _maybe_refresh_stale(path, as_of)
+    return _ready_as_of()
