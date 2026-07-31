@@ -41,3 +41,12 @@ Thumbs.db
 files.zip
 *.zip
 .streamlit/secrets.toml
+
+# --- Session transcripts (local only, never published) ---
+# This repo is PUBLIC. Raw conversation exports sit in the working tree during
+# a session and must never be publishable by a stray `git add -A`. Kept local
+# on purpose: they are working material, not deliverables.
+*Conversation*.txt
+*conversation*.txt
+*transcript*.txt
+*Transcript*.txt
