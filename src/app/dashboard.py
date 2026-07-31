@@ -128,6 +128,37 @@ def _fmt(value: float | None) -> str:
     return f"{value:.1f}" if value is not None else "—"
 
 
+# Narrow-viewport styling. Streamlit has no server-side media queries, so the wide table
+# and the card block are both rendered, and this client-side CSS shows exactly one of them
+# by viewport width. Both are built from the same rungs list (no second data path).
+_LADDER_CSS = """
+<style>
+.tl-ladder-narrow { display: none; }
+@media (max-width: 640px) {
+  .tl-ladder-wide { display: none; }
+  .tl-ladder-narrow { display: block; }
+}
+.tl-rung-card { border: 1px solid rgba(21,22,15,.14); border-radius: 6px; padding: .7rem .8rem;
+  margin: 0 0 .55rem; background: #ffffff; }
+.tl-rung-card.is-sel { border-color: #a9cd2f; box-shadow: inset 3px 0 0 #a9cd2f; background: #f7faef; }
+.tl-rc-top { display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap; }
+.tl-rc-rate { font-family: monospace; font-size: 1.45rem; font-weight: 700; color: #15160f; }
+.tl-rc-badge { font-family: monospace; font-size: .6rem; letter-spacing: .12em; text-transform: uppercase;
+  color: #3c4a12; background: #dff0a8; border: 1px solid #a9cd2f; border-radius: 3px; padding: .1rem .35rem; }
+.tl-rc-dist { font-family: monospace; font-size: .72rem; color: #6a6c5e; margin-left: auto; }
+.tl-rc-track { height: 9px; background: #efece1; border-radius: 5px; overflow: hidden; margin: .55rem 0 .4rem; }
+.tl-rc-fill { height: 100%; border-radius: 5px; background: #a9cd2f; }
+.tl-rc-figs { display: flex; flex-wrap: wrap; gap: .15rem .9rem; font-family: monospace; font-size: .74rem;
+  color: #3c3e33; }
+.tl-rc-figs b { color: #15160f; }
+.tl-rc-figs .va::before, .tl-rc-figs .fha::before { content: ""; display: inline-block; width: .55rem;
+  height: .55rem; border-radius: 2px; margin-right: .3rem; }
+.tl-rc-figs .va::before { background: #5f7c93; }
+.tl-rc-figs .fha::before { background: #c08a2f; }
+</style>
+"""
+
+
 def render_ladder(rungs: list[ladder.LadderRung]) -> ladder.LadderRung:
     st.subheader("Trigger ladder")
     st.caption("How many modeled loans clear agency + economic tests as the rate steps down.")
@@ -139,6 +170,9 @@ def render_ladder(rungs: list[ladder.LadderRung]) -> ladder.LadderRung:
     selected = st.session_state["selected_trigger"]
 
     max_cum = max((r.cumulative_count for r in rungs), default=1) or 1
+
+    # Wide screens: the existing monospace table, unchanged, wrapped only so CSS can hide it
+    # on narrow viewports.
     head = ("<tr style='text-align:right;color:#9fb3a6'><th>trigger</th><th>dist</th>"
             "<th>+new</th><th>cumul</th><th>med recoup</th><th>med BE</th>"
             "<th style='width:28%'>shape</th></tr>")
@@ -154,10 +188,44 @@ def render_ladder(rungs: list[ladder.LadderRung]) -> ladder.LadderRung:
             f"<td>{r.cumulative_count:,}</td><td>{_fmt(r.median_statutory_recoupment)}</td>"
             f"<td>{_fmt(r.median_break_even)}</td><td>{bar}</td></tr>"
         )
+
+    # Narrow screens: one card per rung, same numbers as the table. Lime bar is the cumulative
+    # cleared count (agency AND economic); VA/FHA carry the slate/amber palette. Hyphen, not an
+    # em dash, for missing medians.
+    cards = []
+    for r in rungs:
+        is_sel = r.trigger_rate == selected
+        width = int(r.cumulative_count / max_cum * 100)
+        badge = "<span class='tl-rc-badge'>trigger</span>" if is_sel else ""
+        recoup = f"{r.median_statutory_recoupment:.1f}" if r.median_statutory_recoupment is not None else "-"
+        be = f"{r.median_break_even:.1f}" if r.median_break_even is not None else "-"
+        cards.append(
+            f"<div class='tl-rung-card{' is-sel' if is_sel else ''}'>"
+            f"<div class='tl-rc-top'><span class='tl-rc-rate'>{r.trigger_rate:.3f}%</span>{badge}"
+            f"<span class='tl-rc-dist'>{r.distance_from_market:+.3f} vs mkt</span></div>"
+            f"<div class='tl-rc-track'><div class='tl-rc-fill' style='width:{width}%'></div></div>"
+            f"<div class='tl-rc-figs'>"
+            f"<span><b>{r.cumulative_count:,}</b> cleared</span>"
+            f"<span>+{r.newly_eligible} new</span>"
+            f"<span class='va'>VA <b>{r.eligible_va}</b></span>"
+            f"<span class='fha'>FHA <b>{r.eligible_fha}</b></span>"
+            f"<span>recoup <b>{recoup}</b>mo</span>"
+            f"<span>BE <b>{be}</b>mo</span>"
+            f"</div></div>"
+        )
+
+    st.markdown(_LADDER_CSS, unsafe_allow_html=True)
     st.markdown(
-        f"<table style='width:100%;font-family:monospace;font-size:0.9em'>{head}{''.join(body)}</table>",
+        f"<div class='tl-ladder-wide'>"
+        f"<table style='width:100%;font-family:monospace;font-size:0.9em'>{head}{''.join(body)}</table>"
+        f"</div>",
         unsafe_allow_html=True,
     )
+    st.markdown(
+        f"<div class='tl-ladder-narrow'>{''.join(cards)}</div>",
+        unsafe_allow_html=True,
+    )
+
     rung = next(r for r in rungs if r.trigger_rate == selected)
     render_rung_detail(rung)
     return rung
