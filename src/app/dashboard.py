@@ -15,13 +15,16 @@ import streamlit as st
 from src.app import bootstrap, data_access as da
 from src.core import ladder, pool
 
-# Design language (CC-BRIEF-04).
-BRASS = "#D4A94E"
-LEDGER = "#101915"
-PANEL = "#1f2d25"
-TEXT = "#E9E4D6"
-OPPORTUNITY = "#6BBF8A"  # rates falling
-TREASURY_HUE = "#7A8B82"  # subdued context
+# Design language - light theme, aligned with brianvalentine.co and .streamlit/config.toml.
+INK = "#15160f"            # primary text and axis ink on light
+SURFACE = "#ffffff"        # chart surface (matches app background)
+GRID = "#e4e1d6"           # faint gridlines on the light surface
+HILITE = "#eef4dc"         # selected-row highlight (faint lime tint)
+VA_HUE = "#5f7c93"         # VA series - slate, matches the rung cards
+FHA_HUE = "#c08a2f"        # FHA series - amber, matches the rung cards
+TREASURY_HUE = "#8a8d7f"   # subdued context line on light
+LIME = "#a9cd2f"           # accent - trigger line and cleared bars
+OLIVE = "#506e14"          # legible accent text on light (masthead, annotations)
 
 INGEST_CMD = "python -m src.data.ingest --backfill-years 5"
 SECRETS_HINT = (
@@ -77,7 +80,7 @@ def _ladder(cost_pct: float, threshold: int, seed: int, as_of: str):
 
 def render_masthead(as_of: str | None) -> None:
     st.markdown(
-        f"<h1 style='color:{BRASS};font-family:monospace;letter-spacing:3px;margin-bottom:0'>"
+        f"<h1 style='color:{OLIVE};font-family:monospace;letter-spacing:3px;margin-bottom:0'>"
         "TRIGGER LADDER</h1>",
         unsafe_allow_html=True,
     )
@@ -104,8 +107,8 @@ def render_chart(as_of: str, selected_trigger: float) -> None:
     fig = go.Figure()
     for sid, label, color, width in [
         (da.TREASURY, "10-Yr Treasury", TREASURY_HUE, 1.3),
-        (da.VA_INDEX, "30-Yr VA", BRASS, 2.4),
-        (da.FHA_INDEX, "30-Yr FHA", OPPORTUNITY, 2.4),
+        (da.VA_INDEX, "30-Yr VA", VA_HUE, 2.4),
+        (da.FHA_INDEX, "30-Yr FHA", FHA_HUE, 2.4),
     ]:
         rows = data.get(sid, [])
         if rows:
@@ -114,13 +117,13 @@ def render_chart(as_of: str, selected_trigger: float) -> None:
                 line=dict(color=color, width=width),
                 hovertemplate="%{x}<br>" + label + ": %{y:.3f}%<extra></extra>",
             ))
-    fig.add_hline(y=selected_trigger, line_dash="dash", line_color=BRASS,
-                  annotation_text=f"trigger {selected_trigger:.3f}%", annotation_font_color=BRASS)
-    fig.update_layout(paper_bgcolor=LEDGER, plot_bgcolor=LEDGER, height=360,
-                      font=dict(color=TEXT, family="monospace"), margin=dict(l=10, r=10, t=10, b=10),
+    fig.add_hline(y=selected_trigger, line_dash="dash", line_color=LIME,
+                  annotation_text=f"trigger {selected_trigger:.3f}%", annotation_font_color=OLIVE)
+    fig.update_layout(template="plotly_white", paper_bgcolor=SURFACE, plot_bgcolor=SURFACE, height=360,
+                      font=dict(color=INK, family="monospace"), margin=dict(l=10, r=10, t=10, b=10),
                       legend=dict(orientation="h", y=1.08))
-    fig.update_xaxes(gridcolor=PANEL)
-    fig.update_yaxes(gridcolor=PANEL, ticksuffix="%")
+    fig.update_xaxes(gridcolor=GRID)
+    fig.update_yaxes(gridcolor=GRID, ticksuffix="%")
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -173,15 +176,15 @@ def render_ladder(rungs: list[ladder.LadderRung]) -> ladder.LadderRung:
 
     # Wide screens: the existing monospace table, unchanged, wrapped only so CSS can hide it
     # on narrow viewports.
-    head = ("<tr style='text-align:right;color:#9fb3a6'><th>trigger</th><th>dist</th>"
+    head = ("<tr style='text-align:right;color:#6a6c5e'><th>trigger</th><th>dist</th>"
             "<th>+new</th><th>cumul</th><th>med recoup</th><th>med BE</th>"
             "<th style='width:28%'>shape</th></tr>")
     body = []
     for r in rungs:
         is_sel = r.trigger_rate == selected
-        bar = (f"<div style='background:{BRASS if is_sel else OPPORTUNITY};height:11px;"
+        bar = (f"<div style='background:{OLIVE if is_sel else LIME};height:11px;"
                f"width:{int(r.cumulative_count / max_cum * 100)}%'></div>")
-        bg = f"background:{PANEL};" if is_sel else ""
+        bg = f"background:{HILITE};" if is_sel else ""
         body.append(
             f"<tr style='text-align:right;{bg}'><td>{r.trigger_rate:.3f}</td>"
             f"<td>{r.distance_from_market:.3f}</td><td>+{r.newly_eligible}</td>"
