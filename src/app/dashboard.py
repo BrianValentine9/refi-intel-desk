@@ -261,6 +261,7 @@ def render_sidebar() -> tuple[float, int, int]:
 
 def render_footer() -> None:
     st.divider()
+    st.caption("Built by [Brian Valentine](https://brianvalentine.co) - brianvalentine.co")
     st.caption("Data sources: FRED (Federal Reserve), Freddie Mac PMMS, and Optimal Blue rate "
                "indices via FRED.")
     st.caption("Synthetic/modeled loan pool — no real borrower data. Not financial advice. "
@@ -323,7 +324,6 @@ def main() -> None:
         st.session_state["selected_trigger"] = rungs[len(rungs) // 2].trigger_rate
 
     render_metrics(as_of)
-    render_chart(as_of, st.session_state["selected_trigger"])
     selected_rung = render_ladder(rungs)
     render_morning_brief(
         as_of,
@@ -332,6 +332,9 @@ def main() -> None:
         seed,
         selected_rung.trigger_rate,
     )
+    # Rate-trends chart sits below the ladder and brief now: it is supporting context,
+    # not the answer. Its trigger line tracks the rung selected above.
+    render_chart(as_of, selected_rung.trigger_rate)
     render_footer()
 
 
