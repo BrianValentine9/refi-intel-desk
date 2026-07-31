@@ -31,10 +31,16 @@ def ufmip_amount(
     ufmip_rate: float,
     months_since_prior_fha_closing: int | None = None,
 ) -> float:
-    """Net upfront MIP after any FHA-to-FHA refund credit (domain-rules §2.2.10).
+    """LEGACY. Net upfront MIP after any FHA-to-FHA refund credit (domain-rules §2.2.10).
 
     The refund share (synthetic, §7a) reduces the gross UFMIP when the prior FHA
     loan closed within the 3-year window.
+
+    Superseded for scenario pricing by src/core/ufmip.compute_ufmip, which follows
+    the Handbook 4000.1 refund grid in Decimal instead of this linear float
+    approximation. Kept on disk on purpose: economics.fha_financed_ufmip falls back
+    here when the calculator cannot price a loan, so the ladder never crashes on one
+    bad row. Do not route new work through it.
     """
     gross = base_loan_amount * ufmip_rate
     refund_share = mip_schedule.ufmip_refund_share(months_since_prior_fha_closing)

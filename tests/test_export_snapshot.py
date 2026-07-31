@@ -47,4 +47,7 @@ def test_flip_reproduces_hero_figures():
     assert snap["pool_size"] == 5000
     assert snap["flip_rate"] == 5.625
     flip = next(r for r in snap["rungs"] if r["flip"])
-    assert flip["cumulative"] == 2551
+    # 2551 before FHA UFMIP moved onto the Handbook 4000.1 reference calculator:
+    # every FHA row now carries a real refund clock, so the FHA cohort finances a
+    # smaller net UFMIP and a handful of rungs shift.
+    assert flip["cumulative"] == 2537

@@ -8,20 +8,126 @@ is genuinely worth doing under the correct program lens. See docs/domain-rules.m
 
 from __future__ import annotations
 
+import logging
 import math
 
+from collections import Counter
 from dataclasses import dataclass
+from decimal import Decimal
 
-from . import amort, mip
+from . import amort, mip, ufmip
 from .config import assumptions as A
 from .config.mip_schedule import fha_mip_rates
 from .dateutil import full_months_between
 from .models import ClearanceResult, Loan, Scenario
 
+logger = logging.getLogger(__name__)
+
 
 def _default_new_product(loan: Loan) -> str:
     """Streamline default: ARM refinances to fixed; fixed stays fixed."""
     return "fixed"
+
+
+# --- FHA UFMIP adapter -------------------------------------------------------
+# The desk prices its UFMIP through the HUD-grade reference calculator in
+# src/core/ufmip.py. That module is a reference for checking arithmetic against
+# Handbook 4000.1, not a production underwriting authority; the pool it runs
+# against is synthetic. Decimal lives inside this seam only - scenario math on
+# either side of it stays float.
+
+DESK_PROGRAM_CODE = "203B"  # the desk models ordinary forward FHA only
+DESK_TRANSACTION_TYPE = ufmip.TransactionType.REFI_STREAMLINE
+DESK_FINANCE_UFMIP = True  # the desk always finances net UFMIP into the new balance
+
+# Loans that could not be priced by the calculator and fell back to the legacy
+# path, keyed by the reason. Counts, never exceptions: the ladder must not crash
+# on one bad row.
+_ufmip_fallbacks: Counter[str] = Counter()
+
+
+def ufmip_fallback_counts() -> dict[str, int]:
+    """Reason -> count of loans that fell back to the legacy UFMIP path."""
+    return dict(_ufmip_fallbacks)
+
+
+def reset_ufmip_fallback_counts() -> None:
+    """Clear the fallback tally (used by tests and by one-shot report runs)."""
+    _ufmip_fallbacks.clear()
+
+
+def _to_decimal(value: float | None) -> Decimal | None:
+    """Float -> Decimal at the boundary, via str so the cents are what they read as."""
+    return None if value is None else Decimal(str(value))
+
+
+def _ufmip_inputs(loan: Loan, new_term_months: int) -> ufmip.UfmipInputs:
+    """Build the calculator's input record from a desk Loan.
+
+    The loan on the desk is the one being refinanced, so it supplies every
+    ``prior_*`` field. Anything the pool leaves None gets the desk default.
+    """
+    return ufmip.UfmipInputs(
+        base_loan_amount=int(round(loan.balance)),
+        program=DESK_PROGRAM_CODE,
+        transaction_type=(
+            ufmip.TransactionType(loan.transaction_type)
+            if loan.transaction_type
+            else DESK_TRANSACTION_TYPE
+        ),
+        new_closing_date=A.AS_OF_DATE,
+        case_assignment_date=loan.fha_case_assignment_date or A.AS_OF_DATE,
+        loan_term_months=new_term_months,
+        finance_ufmip=DESK_FINANCE_UFMIP,
+        prior_loan_fha=True,
+        prior_endorsement_date=loan.fha_endorsement_date,
+        prior_closing_date=loan.prior_fha_closing_date or loan.closing_date,
+        prior_ufmip_paid=_to_decimal(loan.prior_ufmip_paid),
+        prior_insurance_termination_reason=(
+            ufmip.TerminationReason(loan.prior_insurance_termination_reason)
+            if loan.prior_insurance_termination_reason
+            else None
+        ),
+        fhac_refund_credit=_to_decimal(loan.fhac_refund_credit),
+    )
+
+
+def _record_fallback(reason: str, loan: Loan, detail: str) -> None:
+    _ufmip_fallbacks[reason] += 1
+    logger.warning(
+        "UFMIP fallback to legacy path for loan %s (%s): %s", loan.loan_id, reason, detail
+    )
+
+
+def fha_financed_ufmip(loan: Loan, ufmip_rate: float, new_term_months: int) -> float:
+    """Net UFMIP financed into the new FHA balance, priced by ``ufmip.compute_ufmip``.
+
+    Falls back to the legacy ``mip.ufmip_amount`` synthetic whenever the calculator
+    declines a loan the desk believes is FHA - an unusable input, an unconfigured
+    rate era, or a product it does not price. Every fallback is logged and counted;
+    none of them stop the ladder.
+    """
+    def legacy() -> float:
+        months_since_prior = (
+            full_months_between(loan.prior_fha_closing_date, A.AS_OF_DATE)
+            if loan.prior_fha_closing_date is not None
+            else None
+        )
+        return mip.ufmip_amount(loan.balance, ufmip_rate, months_since_prior)
+
+    try:
+        result = ufmip.compute_ufmip(_ufmip_inputs(loan, new_term_months))
+    except (ValueError, TypeError) as exc:  # unrecognized enum value, bad date type
+        _record_fallback("ADAPTER_ERROR", loan, f"{type(exc).__name__}: {exc}")
+        return legacy()
+
+    if result.status is ufmip.ApplicabilityOutcome.APPLICABLE_WITH_PREMIUM:
+        return float(result.financed_ufmip)
+    if result.status is ufmip.ApplicabilityOutcome.APPLICABLE_ZERO_PREMIUM:
+        return 0.0
+
+    _record_fallback(result.status.value, loan, "; ".join(result.validation_errors))
+    return legacy()
 
 
 @dataclass(frozen=True)
@@ -73,12 +179,9 @@ def precompute_base(
     elif loan.program == "FHA":
         rates = fha_mip_rates(loan.fha_endorsement_date)
         old_annual_mip_rate = new_annual_mip_rate = rates["annual_mip_rate"]
-        months_since_prior = (
-            full_months_between(loan.prior_fha_closing_date, A.AS_OF_DATE)
-            if loan.prior_fha_closing_date is not None
-            else None
-        )
-        financed_fee = mip.ufmip_amount(loan.balance, rates["ufmip_rate"], months_since_prior)
+        # Only UFMIP routes through the reference calculator; monthly/annual MIP
+        # still comes from the versioned schedule above.
+        financed_fee = fha_financed_ufmip(loan, rates["ufmip_rate"], new_term_months)
         new_balance = loan.balance + financed_fee
         old_monthly_MIP = mip.monthly_mip(loan.balance, old_annual_mip_rate)
         new_monthly_MIP = mip.monthly_mip(new_balance, new_annual_mip_rate)

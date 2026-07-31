@@ -42,6 +42,21 @@ class Loan:
     escrowed: bool
     tags: tuple[str, ...] = ()
 
+    # --- FHA UFMIP contract (src/core/ufmip.py) --------------------------------
+    # Optional with None defaults so every existing construction site keeps
+    # working; the economics adapter supplies desk defaults for whatever is None.
+    # Held as plain str/float rather than the calculator's enums and Decimals so
+    # this module stays dependency-free and the fields persist to SQLite as-is;
+    # the adapter converts at the boundary.
+    #
+    # There is deliberately no separate ``case_assignment_date`` field:
+    # ``fha_case_assignment_date`` above already carries the new transaction's FHA
+    # case-number assignment date, which is exactly what the calculator wants.
+    transaction_type: str | None = None  # ufmip.TransactionType value; desk default REFI_STREAMLINE
+    prior_ufmip_paid: float | None = None  # UFMIP paid on the loan being refinanced
+    prior_insurance_termination_reason: str | None = None  # ufmip.TerminationReason value
+    fhac_refund_credit: float | None = None  # FHA Connection's adjudicated refund, when known
+
 
 @dataclass(frozen=True)
 class ClearanceResult:

@@ -14,6 +14,7 @@ from datetime import date, timedelta
 from src.data import db
 
 from .config.assumptions import AS_OF_DATE
+from .config.mip_schedule import fha_mip_rates
 from .models import Loan
 
 DEFAULT_SEED = 20260610
@@ -47,6 +48,31 @@ def _snap_rate(value: float) -> float:
 
 def _date_minus_days(days: int) -> date:
     return AS_OF_DATE - timedelta(days=days)
+
+
+def _fha_contract_fields(
+    closing_date: date, balance: float, *, endorsement_date: date | None = None
+) -> dict:
+    """Coherent FHA UFMIP contract fields for one row.
+
+    Every FHA row in this pool is an FHA-to-FHA refinance, so the loan being
+    refinanced *is* the prior FHA loan: endorsement follows its closing, the UFMIP
+    refund clock anchors on that same closing (domain-rules §2.2.10), and the
+    termination reason is the payoff that this refinance performs.
+
+    ``prior_ufmip_paid`` is a SYNTHETIC proxy: the era UFMIP rate applied to the
+    current balance, because the pool does not model the prior loan's original
+    amount. ``fhac_refund_credit`` stays None because the desk has no FHA Connection feed,
+    so the calculator computes the credit from the local rule.
+    """
+    endorsement = endorsement_date or min(closing_date + timedelta(days=30), AS_OF_DATE)
+    return dict(
+        fha_endorsement_date=endorsement,
+        prior_fha_closing_date=closing_date,
+        transaction_type="REFI_STREAMLINE",
+        prior_insurance_termination_reason="REFINANCE_PAYOFF",
+        prior_ufmip_paid=round(balance * fha_mip_rates(endorsement)["ufmip_rate"], 2),
+    )
 
 
 def _base_loan(rng: random.Random) -> Loan:
@@ -85,14 +111,20 @@ def _base_loan(rng: random.Random) -> Loan:
     if legacy:
         tags.append(TAG_LEGACY_TAIL)
 
-    fha_endorsement_date = None
     fha_case_assignment_date = None
-    prior_fha_closing_date = None
+    fha_fields: dict = dict(
+        fha_endorsement_date=None, prior_fha_closing_date=None, transaction_type=None,
+        prior_insurance_termination_reason=None, prior_ufmip_paid=None,
+    )
     if program == "FHA":
-        fha_endorsement_date = _date_minus_days(rng.randint(400, 4000))
+        # Case assignment belongs to the NEW transaction, so it sits just behind
+        # the as-of date; everything else is anchored on the prior loan's closing.
         fha_case_assignment_date = _date_minus_days(rng.randint(0, 40))
-        if rng.random() < 0.15:
-            prior_fha_closing_date = _date_minus_days(rng.randint(200, 1000))
+        fha_fields = _fha_contract_fields(
+            closing_date,
+            balance,
+            endorsement_date=min(closing_date + timedelta(days=rng.randint(15, 60)), AS_OF_DATE),
+        )
 
     return Loan(
         loan_id="",
@@ -111,11 +143,10 @@ def _base_loan(rng: random.Random) -> Loan:
         has_second_lien=rng.random() < 0.10,
         borrower_change_pending=rng.random() < 0.05,
         va_funding_fee_exempt=(program == "VA" and rng.random() < 0.25),
-        fha_endorsement_date=fha_endorsement_date,
         fha_case_assignment_date=fha_case_assignment_date,
-        prior_fha_closing_date=prior_fha_closing_date,
         escrowed=rng.random() < 0.7,
         tags=tuple(tags),
+        **fha_fields,
     )
 
 
@@ -135,26 +166,42 @@ def _seeded_edge_cases(rng: random.Random) -> list[Loan]:
             borrower_change_pending=False, va_funding_fee_exempt=False,
             fha_endorsement_date=None, fha_case_assignment_date=None,
             prior_fha_closing_date=None, escrowed=True, tags=(),
+            transaction_type=None, prior_ufmip_paid=None,
+            prior_insurance_termination_reason=None, fhac_refund_credit=None,
         )
         defaults.update(kw)
         return Loan(**defaults)
 
-    fha_kw = dict(program="FHA", fha_endorsement_date=_date_minus_days(1500),
-                  fha_case_assignment_date=recent_case)
+    def fha(**kw) -> Loan:
+        """An FHA row whose UFMIP contract fields stay coherent with its dates."""
+        closing = kw.get("closing_date", seasoned_closing)
+        balance = kw.get("balance", 300_000.0)
+        contract = _fha_contract_fields(
+            closing, balance, endorsement_date=kw.pop("endorsement_date", None)
+        )
+        fields = dict(program="FHA", fha_case_assignment_date=recent_case)
+        fields.update(contract)
+        fields.update(kw)
+        return base(**fields)
 
     return [
         base(product_type="arm", tags=(TAG_VA_ARM_TO_FIXED,)),
         base(remaining_term_months=336, tags=(TAG_TERM_REDUCTION,)),
-        base(program="FHA", fha_endorsement_date=date(2009, 1, 15),
-             fha_case_assignment_date=recent_case, tags=(TAG_FHA_PRE_2009,)),
-        base(**{**fha_kw, "prior_fha_closing_date": _date_minus_days(400)},
-             tags=(TAG_FHA_REFI_WITHIN_3YR,)),
+        # Pre-2009 legacy: a genuinely old loan, so its closing precedes the
+        # 2009-01-15 endorsement that earns the 0.01% streamline rate.
+        fha(closing_date=date(2008, 12, 10), endorsement_date=date(2009, 1, 15),
+            first_payment_date=date(2009, 2, 1), payments_made=209,
+            consecutive_on_time=209, remaining_term_months=151,
+            tags=(TAG_FHA_PRE_2009,)),
+        # Inside the 3-year UFMIP refund window (closed 400 days ago).
+        fha(closing_date=_date_minus_days(400), first_payment_date=_date_minus_days(370),
+            tags=(TAG_FHA_REFI_WITHIN_3YR,)),
         base(has_second_lien=True, tags=(TAG_SECOND_LIEN,)),
-        base(**fha_kw, borrower_change_pending=True, tags=(TAG_BORROWER_REMOVAL,)),
+        fha(borrower_change_pending=True, tags=(TAG_BORROWER_REMOVAL,)),
         base(va_funding_fee_exempt=True, tags=(TAG_VA_FEE_EXEMPT,)),
         base(lates_30_in_6mo=1, tags=(TAG_PAYMENT_DEFECT,)),
         base(lates_30_in_6mo=2, tags=(TAG_PAYMENT_DEFECT,)),
-        base(**fha_kw, occupancy="non_owner", tags=(TAG_NON_OWNER_FHA,)),
+        fha(occupancy="non_owner", tags=(TAG_NON_OWNER_FHA,)),
         # Seasoning boundary pairs (both programs, just on either side of the gate).
         base(first_payment_date=_date_minus_days(209), payments_made=8,
              consecutive_on_time=8, tags=(TAG_SEASONING_BOUNDARY,)),
@@ -162,9 +209,8 @@ def _seeded_edge_cases(rng: random.Random) -> list[Loan]:
              consecutive_on_time=8, tags=(TAG_SEASONING_BOUNDARY,)),
         base(payments_made=5, consecutive_on_time=5, tags=(TAG_SEASONING_BOUNDARY,)),
         base(payments_made=6, consecutive_on_time=6, tags=(TAG_SEASONING_BOUNDARY,)),
-        base(program="FHA", fha_endorsement_date=_date_minus_days(1500),
-             closing_date=_date_minus_days(209), fha_case_assignment_date=AS_OF_DATE,
-             payments_made=8, tags=(TAG_SEASONING_BOUNDARY,)),
+        fha(closing_date=_date_minus_days(209), fha_case_assignment_date=AS_OF_DATE,
+            payments_made=8, tags=(TAG_SEASONING_BOUNDARY,)),
     ]
 
 
@@ -201,9 +247,17 @@ CREATE TABLE IF NOT EXISTS loans (
     fha_case_assignment_date TEXT,
     prior_fha_closing_date TEXT,
     escrowed INTEGER NOT NULL,
-    tags TEXT NOT NULL
+    tags TEXT NOT NULL,
+    transaction_type TEXT,
+    prior_ufmip_paid REAL,
+    prior_insurance_termination_reason TEXT,
+    fhac_refund_credit REAL
 );
 """
+
+# Column count of the current schema. A database written before the FHA UFMIP
+# contract landed has fewer, and load_pool reports it empty so callers regenerate.
+_LOAN_COLUMNS = 25
 
 
 def _iso(value: date | None) -> str | None:
@@ -220,6 +274,8 @@ def _to_row(loan: Loan) -> tuple:
         int(loan.borrower_change_pending), int(loan.va_funding_fee_exempt),
         _iso(loan.fha_endorsement_date), _iso(loan.fha_case_assignment_date),
         _iso(loan.prior_fha_closing_date), int(loan.escrowed), ",".join(loan.tags),
+        loan.transaction_type, loan.prior_ufmip_paid,
+        loan.prior_insurance_termination_reason, loan.fhac_refund_credit,
     )
 
 
@@ -237,15 +293,24 @@ def _from_row(row: tuple) -> Loan:
         fha_endorsement_date=d(row[16]), fha_case_assignment_date=d(row[17]),
         prior_fha_closing_date=d(row[18]), escrowed=bool(row[19]),
         tags=tuple(t for t in row[20].split(",") if t),
+        transaction_type=row[21], prior_ufmip_paid=row[22],
+        prior_insurance_termination_reason=row[23], fhac_refund_credit=row[24],
     )
 
 
+def _table_columns(conn) -> int:
+    return len(list(conn.execute("PRAGMA table_info(loans)")))
+
+
 def persist_pool(conn, loans: list[Loan]) -> int:
-    """Replace the loans table contents with ``loans`` (idempotent for a seed)."""
-    conn.executescript(_LOANS_SCHEMA)
-    conn.execute("DELETE FROM loans")
+    """Replace the loans table contents with ``loans`` (idempotent for a seed).
+
+    Drops first rather than DELETEing, so a database carrying the pre-UFMIP-contract
+    schema is migrated in place instead of failing on the wider insert.
+    """
+    conn.executescript("DROP TABLE IF EXISTS loans;" + _LOANS_SCHEMA)
     conn.executemany(
-        "INSERT INTO loans VALUES (" + ",".join(["?"] * 21) + ")",
+        "INSERT INTO loans VALUES (" + ",".join(["?"] * _LOAN_COLUMNS) + ")",
         [_to_row(loan) for loan in loans],
     )
     conn.commit()
@@ -253,8 +318,14 @@ def persist_pool(conn, loans: list[Loan]) -> int:
 
 
 def load_pool(conn) -> list[Loan]:
-    """Load the persisted pool, or an empty list if none has been generated."""
+    """Load the persisted pool, or an empty list if none has been generated.
+
+    An older, narrower loans table also reads as empty: every caller regenerates
+    from the seed when this returns nothing, which is the migration path.
+    """
     conn.executescript(_LOANS_SCHEMA)
+    if _table_columns(conn) != _LOAN_COLUMNS:
+        return []
     cur = conn.execute("SELECT * FROM loans ORDER BY loan_id")
     return [_from_row(row) for row in cur.fetchall()]
 

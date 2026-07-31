@@ -573,6 +573,29 @@ def test_missing_termination_reason_no_fhac_fails_closed():
 # Invariants
 # --------------------------------------------------------------------------
 
+@pytest.mark.parametrize(
+    "fhac", [None, D("0.00"), D("100.00"), D("2835.00"), D("5250.00"), D("999999.00")]
+)
+def test_net_ufmip_never_exceeds_gross_invariant(fhac):
+    # The invariant the fhac_refund_credit >= 0 guard exists to protect: a refund
+    # credit only ever reduces the premium. A negative FHAC figure used to make
+    # min(fhac, gross) negative, so net = gross - applied came out ABOVE gross.
+    r = compute_ufmip(make_inputs(
+        base_loan_amount=300_000,
+        transaction_type=TransactionType.REFI_RATE_TERM,
+        prior_loan_fha=True,
+        prior_closing_date=date(2025, 5, 10),
+        prior_endorsement_date=date(2025, 7, 1),
+        new_closing_date=date(2026, 6, 20),
+        prior_ufmip_paid=D("5250.00"),
+        fhac_refund_credit=fhac,
+    ))
+    assert r.status == ApplicabilityOutcome.APPLICABLE_WITH_PREMIUM
+    assert r.applied_refund_credit >= D("0.00")
+    assert D("0.00") <= r.net_ufmip <= r.gross_ufmip
+    assert r.financed_ufmip + r.cash_ufmip == r.net_ufmip
+
+
 def test_sec247_row_identity_invariant():
     for band, financed_rate in SEC_247_RATES_FINANCED.items():
         cash_rate = SEC_247_RATES_CASH[band]
