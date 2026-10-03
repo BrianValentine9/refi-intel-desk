@@ -268,19 +268,24 @@ def render_footer() -> None:
                "No NMLS-regulated activity occurs in this software. Educational portfolio project.")
 
 
-def render_morning_brief(
+@st.cache_data(show_spinner=False, max_entries=64)
+def _morning_brief(
     as_of: str,
     cost_pct: float,
     threshold: int,
     seed: int,
     selected_trigger: float,
-) -> None:
-    """AI morning brief with eval gate — template fallback when no API key."""
+) -> dict:
+    """Build, generate and verify the brief once per input set.
+
+    Every Streamlit rerun (any widget touch) used to make a fresh paid Claude call.
+    Keyed on the as-of date plus every input the snapshot reads, so a new data day or a
+    changed assumption still gets a new brief. Returns plain types so the cache can pickle it.
+    """
     from evals.verify import verify_brief
     from src.brief.generate import generate_brief
     from src.brief.snapshot import build_snapshot
 
-    st.subheader("Morning brief")
     conn = da.connect()
     try:
         snapshot = build_snapshot(
@@ -294,15 +299,35 @@ def render_morning_brief(
         result = verify_brief(brief, snapshot)
     finally:
         conn.close()
+    return {
+        "brief": brief,
+        "source": source,
+        "passed": result.passed,
+        "summary": result.summary(),
+        "errors": list(result.errors),
+        "warnings": list(result.warnings),
+    }
 
-    badge = "Eval PASS" if result.passed else "Eval FAIL"
-    st.caption(f"Source: {source} | {badge} | {result.summary()}")
-    if result.errors:
-        for err in result.errors:
+
+def render_morning_brief(
+    as_of: str,
+    cost_pct: float,
+    threshold: int,
+    seed: int,
+    selected_trigger: float,
+) -> None:
+    """AI morning brief with eval gate — template fallback when no API key."""
+    st.subheader("Morning brief")
+    out = _morning_brief(as_of, cost_pct, threshold, seed, selected_trigger)
+
+    badge = "Eval PASS" if out["passed"] else "Eval FAIL"
+    st.caption(f"Source: {out['source']} | {badge} | {out['summary']}")
+    if out["errors"]:
+        for err in out["errors"]:
             st.error(err)
-    for warn in result.warnings:
+    for warn in out["warnings"]:
         st.warning(warn)
-    st.markdown(brief)
+    st.markdown(out["brief"])
 
 
 def main() -> None:
