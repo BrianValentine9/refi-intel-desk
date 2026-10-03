@@ -1,0 +1,21 @@
+# Render Blueprint for the always-on Trigger Ladder desk (Starter, about $7/month, verified 2026-10-03).
+# Render > New > Blueprint > pick this repo. Render asks for the two secret values below at setup;
+# they are never stored in this file. The working DB is copied from data/seed.db on first boot
+# and refreshed from FRED when stale, so no disk is needed.
+services:
+  - type: web
+    name: trigger-ladder
+    runtime: python
+    plan: starter
+    branch: main
+    autoDeploy: true
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run streamlit_app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true
+    healthCheckPath: /_stcore/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.14.6
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: FRED_API_KEY
+        sync: false
