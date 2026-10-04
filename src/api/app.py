@@ -273,6 +273,7 @@ def create_app(
         return {
             "ready": v is not None,
             "as_of": v.as_of if v else None,
+            "pool_size": (len(state.loans) or pool.DEFAULT_POOL_SIZE) if v else None,
             "ladder_warm": warm,
             "refresh": {
                 "last_run_at": sched.last_run_at if sched else None,

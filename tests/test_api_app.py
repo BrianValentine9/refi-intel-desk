@@ -143,6 +143,7 @@ def test_health_and_not_ready_on_empty_db(empty_db):
         assert r.status_code == 200 and r.text == "ok" and r.headers["content-type"].startswith("text/plain")
         st = c.get("/api/status").json()
         assert st["ready"] is False and st["as_of"] is None and st["ladder_warm"] is False
+        assert st["pool_size"] is None
         for url in ("/api/metrics", "/api/series?days=90", "/api/ladder", "/api/brief"):
             r = c.get(url)
             assert r.status_code == 503 and r.json() == {"status": "not_ready"}, url
@@ -157,6 +158,7 @@ def test_status_metrics_series_shapes(client_for):
     wait_ready(c)
     st = c.get("/api/status").json()
     assert st["ready"] is True and st["as_of"] and st["ladder_warm"] is True
+    assert isinstance(st["pool_size"], int) and st["pool_size"] > 0
     assert set(st["refresh"]) == {"last_run_at", "last_result", "in_progress"}
     m = c.get("/api/metrics").json()
     assert m["as_of"] == st["as_of"]
