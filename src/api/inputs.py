@@ -14,7 +14,7 @@ THRESHOLD_RANGE = (12, 120)
 RUNG_RANGE = (0, 16)
 DAYS_CHOICES = (90, 180, 365)
 
-_INT = re.compile(r"[0-9]+")
+_INT = re.compile(r"[0-9]{1,6}")  # capped so a huge digit string is an InputError
 
 
 class InputError(ValueError):

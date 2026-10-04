@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from src.api import inputs
+from src.api import compute, inputs
 from src.api.compute import LadderService, default_rung_index
 from src.core import ladder, pool
 from src.data import db
@@ -18,7 +18,7 @@ SEED = Path("data") / "seed.db"
 # ---- inputs ----------------------------------------------------------------
 
 @pytest.mark.parametrize("fn,good,bad", [
-    (inputs.parse_cost_bp, ["50", 100, "150", " 70 "], ["49", "155", "100.5", "", "-50", True, None, 100.0, "1e2", "abc"]),
+    (inputs.parse_cost_bp, ["50", 100, "150", " 70 "], ["49", "155", "100.5", "", "-50", True, None, 100.0, "1e2", "abc", "9" * 5000]),
     (inputs.parse_threshold, ["12", 48, "120"], ["11", "121", "48.0", "", "-1", False]),
     (inputs.parse_rung, ["0", 16, "8"], ["17", "-1", "1.5", "", True]),
     (inputs.parse_days, ["90", 180, "365"], ["30", "91", "90.0", "", True, "-90"]),
@@ -117,23 +117,87 @@ def test_lru_eviction(make):
     for t in (12, 13, 14):
         svc.request("d", 100, t)
         assert svc.wait(svc.key_for("d", 100, t), 5).status == "ready"
-    assert svc.peek(svc.key_for("d", 100, 12)).status == "computing"  # evicted
+    assert svc.peek(svc.key_for("d", 100, 12)).status == "unknown"  # evicted
     assert svc.peek(svc.key_for("d", 100, 14)).status == "ready"
     assert len(fake.calls) == 3
 
 
-def test_failure_reports_error_then_reruns(make):
-    fake = Fake(fail_keys=[20])
+class Clock:
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+
+def test_failing_key_is_cooled_down_not_hammered(make):
+    class Always(Fake):
+        def __call__(self, *a, **k):
+            super().__call__(*a, **k)
+            raise RuntimeError("boom")
+
+    fake, clock = Always(), Clock()
     fake.gate.set()
-    svc, _ = make(fake)
+    svc, _ = make(fake, clock=clock)
     key = svc.key_for("d", 100, 20)
     svc.request("d", 100, 20)
     assert svc.wait(key, 5).status == "error"
-    assert "boom" in svc.peek(key).message
-    assert svc.request("d", 100, 20).status == "error"  # reported once
-    assert svc.request("d", 100, 20).status in ("computing", "ready")  # then re-enqueued
-    assert svc.wait(key, 5).status == "ready"  # worker survived
+    for _ in range(25):  # a 1 Hz poller inside the cool-down
+        out = svc.request("d", 100, 20)
+        assert out.status == "error" and "boom" in out.message
+    assert len(fake.calls) == 1
+    clock.t += compute.ERROR_COOLDOWN_SEC + 1
+    assert svc.request("d", 100, 20).status == "computing"  # exactly one retry
+    assert svc.request("d", 100, 20).status in ("computing", "error")
+    assert svc.wait(key, 5).status == "error"
     assert len(fake.calls) == 2
+
+
+def test_fail_once_then_succeed_after_cooldown(make):
+    fake, clock = Fake(fail_keys=[20]), Clock()
+    fake.gate.set()
+    svc, _ = make(fake, clock=clock)
+    key = svc.key_for("d", 100, 20)
+    svc.request("d", 100, 20)
+    assert svc.wait(key, 5).status == "error"
+    assert svc.request("d", 100, 20).status == "error"
+    clock.t += compute.ERROR_COOLDOWN_SEC + 1
+    assert svc.request("d", 100, 20).status == "computing"
+    assert svc.wait(key, 5).status == "ready"  # worker survived the failure
+    assert len(fake.calls) == 2
+
+
+def test_unknown_and_closed_statuses(make):
+    fake = Fake()
+    fake.gate.set()
+    svc, _ = make(fake)
+    key = svc.key_for("d", 100, 48)
+    assert svc.peek(key).status == "unknown"
+    assert svc.wait(key, 5).status == "unknown"  # returns at once, no hang
+    svc.close()
+    assert svc.request("d", 100, 48).status == "closed"
+    assert svc.peek(key).status == "closed"
+    assert svc.wait(key).status == "closed"  # timeout=None must not hang
+    assert svc.set_as_of("d2") is False
+    assert fake.calls == []
+
+
+def test_warm_default_keeps_only_the_latest_warm_job(make):
+    svc, fake = make(max_pending=2)
+    svc.request("d", 100, 12)
+    assert fake.started.wait(5)
+    for day in ("w1", "w2", "w3"):
+        svc.warm_default(day)
+    assert svc.peek(svc.default_key("w1")).status == "unknown"  # dropped
+    assert svc.peek(svc.default_key("w2")).status == "unknown"
+    assert svc.peek(svc.default_key("w3")).status == "computing"
+    assert svc.request("d", 100, 13).status == "computing"
+    assert svc.request("d", 100, 14).status == "computing"
+    assert svc.request("d", 100, 15).status == "busy"  # warm does not use a normal slot
+    fake.gate.set()
+    assert svc.wait(svc.default_key("w3"), 5).status == "ready"
+    assert svc.wait(svc.key_for("d", 100, 14), 5).status == "ready"
+    assert len(fake.calls) == 4
 
 
 def test_warm_default_jumps_the_queue(make):

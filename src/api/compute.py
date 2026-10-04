@@ -21,6 +21,9 @@ from src.core.config import assumptions as A
 
 DEFAULT_COST_BP = 100
 DEFAULT_THRESHOLD = 48
+# A failed key keeps answering "error" for this long before one retry is allowed, so a
+# poller cannot make an always-failing ladder hog the single worker.
+ERROR_COOLDOWN_SEC = 30.0
 
 Key = tuple  # (as_of, cost_bp, threshold, seed, step, rate_range)
 
@@ -34,7 +37,7 @@ class LadderResult:
 
 @dataclass(frozen=True)
 class Outcome:
-    status: str  # "ready" | "computing" | "busy" | "error"
+    status: str  # "ready" | "computing" | "busy" | "error" | "unknown" | "closed"
     key: Key
     value: LadderResult | None = None
     message: str | None = None
@@ -51,7 +54,8 @@ def default_rung_index(rungs) -> int:
 @dataclass
 class _State:
     cache: OrderedDict = field(default_factory=OrderedDict)
-    errors: dict = field(default_factory=dict)
+    errors: dict = field(default_factory=dict)  # key -> (message, failed_at)
+    warm_key: Key | None = None  # the one queued priority (warm) job, if any
     queue: deque = field(default_factory=deque)
     running: Key | None = None
     current_as_of: str | None = None
@@ -68,6 +72,7 @@ class LadderService:
         max_entries: int = 64,
         max_pending: int = 2,
         seed: int = pool.DEFAULT_SEED,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if connect is None:
             from src.app import data_access as da
@@ -77,7 +82,8 @@ class LadderService:
         self._connect = connect
         self._ladder_fn = ladder_fn
         self._max_entries = max_entries
-        self._max_pending = max_pending
+        self._max_pending = max_pending  # counts queued keys, not the one running
+        self._clock = clock
         self._seed = seed
         self._cond = threading.Condition()  # one lock around all state
         self._s = _State()
@@ -96,7 +102,11 @@ class LadderService:
         return self._request(self.key_for(as_of, cost_bp, threshold), priority=False)
 
     def warm_default(self, as_of: str) -> Outcome:
-        """Enqueue the default ladder at the front of the queue (ignores max_pending)."""
+        """Enqueue the default ladder at the front of the queue (ignores max_pending).
+
+        At most one warm job is queued at a time: a warm for a different as_of drops an
+        older warm that has not started.
+        """
         return self._request(self.default_key(as_of), priority=True)
 
     def peek(self, key: Key) -> Outcome:
@@ -105,12 +115,15 @@ class LadderService:
             return self._peek_locked(key)
 
     def wait(self, key: Key, timeout: float | None = None) -> Outcome:
-        """Block until the key is ready or failed (or timeout); returns its state."""
+        """Block until the key settles (ready, error, closed, unknown) or timeout.
+
+        Returns promptly for a key that is not scheduled ("unknown") or a stopped service.
+        """
         deadline = None if timeout is None else time.monotonic() + timeout
         with self._cond:
             while True:
                 out = self._peek_locked(key)
-                if out.status in ("ready", "error"):
+                if out.status != "computing":
                     return out
                 remaining = None if deadline is None else deadline - time.monotonic()
                 if remaining is not None and remaining <= 0:
@@ -147,33 +160,51 @@ class LadderService:
         if key in s.cache:
             return Outcome("ready", key, s.cache[key])
         if key in s.errors:
-            return Outcome("error", key, message=s.errors[key])
-        return Outcome("computing", key)  # queued, running, or not yet requested
+            return Outcome("error", key, message=s.errors[key][0])
+        if s.stop:
+            return Outcome("closed", key)
+        if s.running == key or key in s.queue:
+            return Outcome("computing", key)
+        return Outcome("unknown", key)  # never requested, evicted, or dropped
 
     def _request(self, key: Key, *, priority: bool) -> Outcome:
         with self._cond:
             s = self._s
+            if s.stop:
+                return Outcome("closed", key)
             if key in s.cache:
                 s.cache.move_to_end(key)
                 return Outcome("ready", key, s.cache[key])
             if key in s.errors:
-                # Report the failure once; the next request re-enqueues.
-                return Outcome("error", key, message=s.errors.pop(key))
+                message, failed_at = s.errors[key]
+                if self._clock() - failed_at < ERROR_COOLDOWN_SEC:
+                    return Outcome("error", key, message=message)  # no enqueue, not consumed
+                del s.errors[key]  # cool-down over: fall through to one re-enqueue
             if s.running == key:
                 return Outcome("computing", key)
             if key in s.queue:
                 if priority:
-                    s.queue.remove(key)
-                    s.queue.appendleft(key)
+                    self._make_warm_locked(key)
                 return Outcome("computing", key)
             if priority:
-                s.queue.appendleft(key)
-            elif len(s.queue) >= self._max_pending:
-                return Outcome("busy", key)
+                self._make_warm_locked(key)
             else:
+                normal = len(s.queue) - (1 if s.warm_key in s.queue else 0)
+                if normal >= self._max_pending:
+                    return Outcome("busy", key)
                 s.queue.append(key)
             self._cond.notify_all()
             return Outcome("computing", key)
+
+    def _make_warm_locked(self, key: Key) -> None:
+        """Put ``key`` first in the queue as the single warm job (drops a stale warm)."""
+        s = self._s
+        if s.warm_key is not None and s.warm_key != key and s.warm_key in s.queue:
+            s.queue.remove(s.warm_key)
+        if key in s.queue:
+            s.queue.remove(key)
+        s.queue.appendleft(key)
+        s.warm_key = key
 
     def _run(self) -> None:
         while True:
@@ -183,6 +214,8 @@ class LadderService:
                 if self._s.stop:
                     return
                 key = self._s.queue.popleft()
+                if key == self._s.warm_key:
+                    self._s.warm_key = None
                 self._s.running = key
             value, error = None, None
             try:
@@ -198,7 +231,7 @@ class LadderService:
                     while len(s.cache) > self._max_entries:
                         s.cache.popitem(last=False)
                 else:
-                    s.errors[key] = error
+                    s.errors[key] = (error, self._clock())
                 self._cond.notify_all()
 
     def _compute(self, key: Key) -> LadderResult:
