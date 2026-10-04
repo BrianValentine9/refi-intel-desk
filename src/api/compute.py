@@ -8,6 +8,7 @@ owns a fresh sqlite connection per compute; connections are never shared across 
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 from collections import OrderedDict, deque
@@ -143,6 +144,15 @@ class LadderService:
         with self._cond:
             self._s.current_as_of = new_as_of
         return True
+
+    def retry_after(self, key: Key) -> int:
+        """Whole seconds left in a failed key's cool-down (at least 1)."""
+        with self._cond:
+            entry = self._s.errors.get(key)
+            if entry is None:
+                return max(1, math.ceil(ERROR_COOLDOWN_SEC))
+            left = ERROR_COOLDOWN_SEC - (self._clock() - entry[1])
+            return max(1, math.ceil(left))
 
     @property
     def current_as_of(self) -> str | None:

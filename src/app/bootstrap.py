@@ -139,6 +139,19 @@ def _ready_as_of() -> tuple[bool, str | None]:
         conn.close()
 
 
+def prepare_database() -> tuple[bool, str | None]:
+    """Fast, offline start-up step: copy the committed seed if the working DB is not ready.
+
+    No FRED call and no refresh (the API process does those in the background).
+    Returns ``(ready, as_of)``.
+    """
+    ready, as_of = _ready_as_of()
+    if not ready:
+        _copy_seed_if_needed(da.db_path())
+        ready, as_of = _ready_as_of()
+    return ready, as_of
+
+
 def ensure_database(*, backfill_years: int = 5) -> tuple[bool, str | None]:
     """Make sure the working DB has the required series and is reasonably current.
 
@@ -148,10 +161,7 @@ def ensure_database(*, backfill_years: int = 5) -> tuple[bool, str | None]:
     """
     path = da.db_path()
 
-    ready, as_of = _ready_as_of()
-    if not ready:
-        _copy_seed_if_needed(path)
-        ready, as_of = _ready_as_of()
+    ready, as_of = prepare_database()
 
     if not ready:
         # No existing DB and no usable seed: first-run ingest only if keyed.
