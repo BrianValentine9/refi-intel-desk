@@ -10,6 +10,7 @@ from src.core import ladder, pool
 from src.data import db
 
 SEED = Path("data") / "seed.db"
+FROZEN_SEED = Path("tests") / "fixtures" / "seed_2026-07-29.db"  # pins the July-29 hero figures
 
 
 def _require_seed():
@@ -42,8 +43,7 @@ def test_export_matches_core():
 
 
 def test_flip_reproduces_hero_figures():
-    _require_seed()
-    snap = ex.build_snapshot(SEED)
+    snap = ex.build_snapshot(FROZEN_SEED)  # opened read-only by build_snapshot
     assert snap["pool_size"] == 5000
     assert snap["flip_rate"] == 5.625
     flip = next(r for r in snap["rungs"] if r["flip"])

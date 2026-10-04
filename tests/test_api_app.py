@@ -23,6 +23,8 @@ from src.app import bootstrap
 from src.core.ladder import LadderRung
 
 SEED = Path("data") / "seed.db"
+# Frozen copy of the 2026-07-29 seed: tests that pin July numbers read this, never data/seed.db.
+FROZEN_SEED = Path("tests") / "fixtures" / "seed_2026-07-29.db"
 
 
 @pytest.fixture(autouse=True)
@@ -35,7 +37,9 @@ def _no_keys(monkeypatch):
 def seed_db(tmp_path, monkeypatch):
     path = tmp_path / "work" / "ladder.db"
     path.parent.mkdir()
-    path.write_bytes(SEED.read_bytes())  # bytes copy; the seed itself is never opened
+    # Frozen July-29 copy (bytes; never opened): its as_of is always stale, which the refresh tests need,
+    # and the July numbers stay put whatever the live seed holds. data/seed.db is covered by work_db users.
+    path.write_bytes(FROZEN_SEED.read_bytes())
     monkeypatch.setenv("REFI_DB_PATH", str(path))
     return path
 

@@ -13,6 +13,7 @@ from src.core import ladder, pool
 from src.data import db
 
 SEED = Path("data") / "seed.db"
+FROZEN_SEED = Path("tests") / "fixtures" / "seed_2026-07-29.db"  # pins the July-29 numbers
 
 
 # ---- inputs ----------------------------------------------------------------
@@ -235,10 +236,8 @@ def test_default_rung_is_nearest_market():
 # ---- golden: real ladder on a seed copy ------------------------------------
 
 def test_golden_default_ladder_matches_direct_build(tmp_path):
-    if not SEED.is_file():
-        pytest.skip("data/seed.db not present")
     target = tmp_path / "work.db"
-    shutil.copy2(SEED, target)
+    shutil.copy2(FROZEN_SEED, target)
 
     def connect():
         return db.connect(target, ensure_schema=False)

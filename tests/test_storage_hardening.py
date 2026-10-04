@@ -16,6 +16,8 @@ from src.core import pool
 from src.data import db
 
 SEED = Path("data") / "seed.db"
+FROZEN_SEED = Path("tests") / "fixtures" / "seed_2026-07-29.db"
+FROZEN_SHA256 = "608d0b3a3c75cc98d7e084056ff52e10214aed0810e1c6f593acaf8758dabadf"
 
 
 def _sha(path: Path) -> str:
@@ -174,3 +176,16 @@ def test_copy_failure_returns_false_and_leaves_no_tmp(tmp_path, monkeypatch):
     monkeypatch.setattr(bootstrap.os, "replace", boom)
     assert bootstrap.ensure_database() == (False, None)
     assert not (tmp_path / "work.db.tmp").exists()
+
+
+def test_frozen_fixture_is_unchanged_after_readonly_use():
+    """The July-29 fixture is frozen: pinned hash, rollback journal, and a read-only open leaves it alone."""
+    assert _sha(FROZEN_SEED) == FROZEN_SHA256
+    assert FROZEN_SEED.read_bytes()[18:20] == b""
+    conn = db.connect(FROZEN_SEED, readonly=True)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM loans").fetchone()[0] == 5000
+    finally:
+        conn.close()
+    assert _sha(FROZEN_SEED) == FROZEN_SHA256
+    assert not FROZEN_SEED.with_name(FROZEN_SEED.name + "-wal").exists()
