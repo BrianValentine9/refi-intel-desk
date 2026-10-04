@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from src.brief.snapshot import BriefSnapshot
+from src.brief.snapshot import BriefSnapshot, as_of_mentioned
 
 _PCT = re.compile(r"(?<!\d)(-?\d+\.\d{1,3})%")
 _INT = re.compile(r"\b(\d{1,3}(?:,\d{3})*|\d+)\b")
@@ -77,7 +77,7 @@ def verify_brief(text: str, snapshot: BriefSnapshot) -> EvalResult:
         result.passed = False
         result.errors.append(f"unsupported count {value:,}")
 
-    if snapshot.as_of not in text:
+    if not as_of_mentioned(text, snapshot.as_of):
         result.warnings.append(f"as-of date {snapshot.as_of} not mentioned")
 
     if "synthetic" not in text.lower() and "modeled" not in text.lower():

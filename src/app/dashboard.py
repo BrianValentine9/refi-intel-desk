@@ -13,6 +13,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from src.app import bootstrap, data_access as da
+from src.brief.snapshot import select_rung
 from src.core import ladder, pool
 
 # Design language - light theme, aligned with brianvalentine.co and .streamlit/config.toml.
@@ -229,7 +230,10 @@ def render_ladder(rungs: list[ladder.LadderRung]) -> ladder.LadderRung:
         unsafe_allow_html=True,
     )
 
-    rung = next(r for r in rungs if r.trigger_rate == selected)
+    try:
+        rung = select_rung(rungs, selected_trigger=selected)
+    except ValueError:
+        rung = rungs[len(rungs) // 2]  # same fallback as the reset logic above
     render_rung_detail(rung)
     return rung
 

@@ -13,6 +13,8 @@ from .snapshot import BriefSnapshot
 load_dotenv()
 
 MODEL = "claude-sonnet-4-6"
+CLIENT_TIMEOUT_SEC = 20.0
+CLIENT_MAX_RETRIES = 1
 SYSTEM_PROMPT = """You write a short mortgage refi intelligence morning brief for professionals.
 Rules:
 - Use ONLY numbers present in the JSON snapshot. Do not invent figures.
@@ -87,18 +89,27 @@ def generate_brief(
             raise RuntimeError("anthropic package not installed") from exc
         return render_template_brief(snapshot), "template"
 
-    client = anthropic.Anthropic(api_key=api_key)
     user_content = (
         "Write the morning brief from this snapshot JSON:\n\n"
         + json.dumps(snapshot.to_dict(), indent=2)
     )
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=800,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_content}],
-    )
-    text = response.content[0].text.strip()
+    try:
+        client = anthropic.Anthropic(
+            api_key=api_key, timeout=CLIENT_TIMEOUT_SEC, max_retries=CLIENT_MAX_RETRIES
+        )
+        response = client.messages.create(
+            model=MODEL,
+            max_tokens=800,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_content}],
+        )
+        text = response.content[0].text
+        text = text.strip() if isinstance(text, str) else ""
+    except Exception:
+        # Any client, network, or response-shape failure: fall back (never log the key).
+        text = ""
+    if not text:
+        return render_template_brief(snapshot), "template"
     return text, "llm"
 
 
