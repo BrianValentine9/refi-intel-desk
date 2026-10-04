@@ -68,13 +68,24 @@ def _copy_seed_if_needed(path: Path) -> bool:
     # Atomic and WAL-safe: stage next to the target, drop stale sidecars so they cannot
     # be replayed onto the fresh file, swap in, then switch the copy to WAL.
     tmp = path.with_name(path.name + ".tmp")
-    shutil.copy2(SEED_DB_PATH, tmp)
-    for suffix in ("-wal", "-shm", "-journal"):
-        sidecar = path.with_name(path.name + suffix)
-        if sidecar.exists():
-            sidecar.unlink()
-    os.replace(tmp, path)
-    db.init_working_db(path)
+    try:
+        shutil.copy2(SEED_DB_PATH, tmp)
+        # -wal first: it holds committed data, so if another connection has it open
+        # (Windows WinError 32) we stop before deleting anything else.
+        for suffix in ("-wal", "-journal", "-shm"):
+            sidecar = path.with_name(path.name + suffix)
+            if sidecar.exists():
+                sidecar.unlink()
+        os.replace(tmp, path)
+        db.init_working_db(path)
+    except OSError:
+        # A live connection holds the working DB. Leave it as it was and let the
+        # caller fall through to its not-ready path instead of crashing.
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        return False
     return True
 
 

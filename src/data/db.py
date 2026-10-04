@@ -10,6 +10,7 @@ import sqlite3
 from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 from .fred_client import Observation
 
@@ -52,7 +53,7 @@ def connect(
     path = Path(db_path)
     kwargs = {} if timeout is None else {"timeout": timeout}
     if readonly:
-        return sqlite3.connect(f"file:{path.resolve().as_posix()}?mode=ro", uri=True, **kwargs)
+        return sqlite3.connect(f"file:{quote(path.resolve().as_posix())}?mode=ro", uri=True, **kwargs)
     if path.parent and not path.parent.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, **kwargs)
