@@ -316,7 +316,7 @@ def test_brief_ai_reasons_and_status_with_fake_guard(client_for, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-test-value-do-not-leak")
     calls = []
 
-    def fake_gen(snapshot, *, mode):
+    def fake_gen(snapshot, *, mode, **kw):
         calls.append(mode)
         return "Model text, synthetic pool. Not advice.", "llm"
 
@@ -330,7 +330,8 @@ def test_brief_ai_reasons_and_status_with_fake_guard(client_for, monkeypatch):
     assert c.get("/api/brief?rung=3").json()["ai"]["reason"] == "daily_cap"  # new key, cap spent
     assert wait_ready(c, "/api/brief?cost_bp=150").json()["ai"]["reason"] == "scope"
     st = c.get("/api/status").json()["brief_ai"]
-    assert st == {"scope": "default_assumptions", "available": True, "used_today": 1, "cap": 1, "cooling_down": False}
+    assert st == {"scope": "default_assumptions", "available": True, "used_today": 1, "cap": 1, "cooling_down": False,
+                  "eval_fails_today": 0, "ip_header_missing": 0, "usage_file_issue": False}
     assert "fake-test-value" not in c.get("/api/status").text + c.get("/api/brief").text
 
 
@@ -339,7 +340,7 @@ def test_brief_failure_reports_cooldown_without_error_text(client_for, monkeypat
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-test-value")
 
-    def boom(snapshot, *, mode):
+    def boom(snapshot, *, mode, **kw):
         raise RuntimeError("sk-ant-leaky-detail")
 
     c, _fake, _s = client_for(brief_guard=BriefGuard(BriefSettings(scope="all"), generate=boom))
@@ -355,7 +356,7 @@ def test_brief_ip_header_is_passed_only_when_configured(client_for, monkeypatch)
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-test-value")
     seen = []
-    g = BriefGuard(BriefSettings(scope="all", ip_header="X-Forwarded-For"), generate=lambda s, *, mode: ("ok text", "llm"))
+    g = BriefGuard(BriefSettings(scope="all", ip_header="X-Forwarded-For"), generate=lambda s, *, mode, **kw: ("ok text", "llm"))
     orig = g.request
 
     def spy(snapshot, **kw):

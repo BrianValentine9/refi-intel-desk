@@ -217,12 +217,15 @@ def create_app(
     brief_guard: BriefGuard | None = None,
 ) -> FastAPI:
     state = AppState()
+    default_guard = brief_guard is None
     guard = brief_guard or BriefGuard()  # settings read from the environment once, here
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         # Synchronous part: stays fast, uvicorn serves nothing until it returns.
         state.base_path = da.db_path()
+        if default_guard:  # the daily AI count survives a restart; an injected (test) guard keeps its own
+            guard.attach_usage_file(state.base_path.parent / "brief_usage.json")
         discard_old_generations(state.base_path)  # files a previous process left behind
         ready, as_of = bootstrap.prepare_database()
         if ladder_service is not None:

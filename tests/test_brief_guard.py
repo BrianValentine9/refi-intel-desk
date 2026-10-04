@@ -2,10 +2,12 @@
 no Anthropic client is ever built for a paid call, and no key is read from the real environment."""
 from __future__ import annotations
 
+import json
 import sys
 import threading
 import time
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -47,7 +49,7 @@ class Gen:
         self.gate = threading.Event()
         self.gate.set()
 
-    def __call__(self, snapshot, *, mode):
+    def __call__(self, snapshot, *, mode, max_retries=None):
         self.calls += 1
         self.started.set()
         self.gate.wait(5)
@@ -57,7 +59,9 @@ class Gen:
             return "fallback template", "template"
         if self.mode == "empty":
             return "   ", "llm"
-        return f"AI text {self.calls}", "llm"
+        if self.mode == "bad":  # fails the checker: an invented rate
+            return "Rates sit at 9.999% today.", "llm"
+        return "AI text for the morning brief.", "llm"
 
 
 class Clock:
@@ -85,7 +89,7 @@ def test_settings_defaults_and_invalid_values():
     d = BriefSettings.from_env({})
     assert (d.scope, d.daily_cap, d.cooldown_sec, d.ip_header, d.issues) == ("default_assumptions", 20, 900, None, ())
     bad = BriefSettings.from_env({"BRIEF_AI_SCOPE": "yes", "BRIEF_DAILY_CAP": "-3", "BRIEF_COOLDOWN_SEC": "abc"})
-    assert (bad.scope, bad.daily_cap, bad.cooldown_sec) == ("default_assumptions", 0, 900)
+    assert (bad.scope, bad.daily_cap, bad.cooldown_sec) == ("off", 0, 900)  # unknown scope fails closed
     assert set(bad.issues) == {"BRIEF_AI_SCOPE", "BRIEF_DAILY_CAP", "BRIEF_COOLDOWN_SEC"}
     assert BriefSettings.from_env({"BRIEF_DAILY_CAP": "xyz"}).daily_cap == 0
     ok = BriefSettings.from_env({"BRIEF_AI_SCOPE": "OFF", "BRIEF_DAILY_CAP": "0", "BRIEF_IP_HEADER": " X-Forwarded-For "})
@@ -177,9 +181,9 @@ def test_cap_reserved_before_call_and_not_refunded(snap):
     seen = []
     inner = Gen("raise")
 
-    def probe(snapshot, *, mode):
+    def probe(snapshot, *, mode, **kw):
         seen.append(g.status()["used_today"])  # the count already includes this attempt
-        return inner(snapshot, mode=mode)
+        return inner(snapshot, mode=mode, **kw)
 
     g, _, _ = make(BriefSettings(scope="all", cooldown_sec=0), gen=probe)
     ask(g, snap)
@@ -327,3 +331,98 @@ def test_ip_limit_on_with_header_and_spoofed_first_hop_ignored(snap):
     assert ask(g, s[4], ip="spoof, 8.8.8.8")[1:] == ("llm", None)  # another real client is fine
     clock.t += 3601
     assert ask(g, s[5], ip="7.7.7.7")[1:] == ("llm", None)  # the window has passed
+
+
+# ---- eval failure (B1) ---------------------------------------------------------
+
+def test_failing_ai_text_is_template_negative_cached_and_never_recalled(snap):
+    g, gen, _ = make(BriefSettings(scope="all", daily_cap=5), gen=Gen("bad"))
+    text, source, reason = ask(g, snap)
+    assert (source, reason) == ("template", "eval_fail") and "9.999" not in text
+    assert g._cache == {} and g.status()["used_today"] == 1 and g.status()["eval_fails_today"] == 1
+    assert g.status()["cooling_down"] is False
+    for _ in range(3):
+        assert ask(g, snap)[1:] == ("template", "eval_fail")
+    assert gen.calls == 1 and g.status()["used_today"] == 1  # free, no retry
+    gen.mode = "text"
+    assert ask(g, other_snap(snap))[1:] == ("llm", None)  # other keys still work
+
+
+def test_waiter_on_eval_fail_flight_gets_same_outcome(snap):
+    gen = Gen("bad")
+    gen.gate.clear()
+    g, _, _ = make(BriefSettings(scope="all"), gen=gen, wait_sec=5)
+    t1, o1 = run_thread(lambda: ask(g, snap))
+    assert gen.started.wait(5)
+    t2, o2 = run_thread(lambda: ask(g, snap))
+    time.sleep(0.1)
+    gen.gate.set()
+    t1.join(5)
+    t2.join(5)
+    assert o1["r"][1:] == ("template", "eval_fail") and o2["r"][1:] == ("template", "eval_fail") and gen.calls == 1
+
+
+# ---- one HTTP request per counted call (M2) ------------------------------------
+
+def test_guarded_path_builds_client_with_zero_retries(snap, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-test-value")
+    made = []
+
+    class Ok:
+        def __init__(self, **kw):
+            made.append(kw)
+            self.messages = SimpleNamespace(create=lambda **k: SimpleNamespace(content=[SimpleNamespace(text="AI text for the brief.")]))
+
+    monkeypatch.setitem(sys.modules, "anthropic", SimpleNamespace(Anthropic=Ok))
+    g = BriefGuard(BriefSettings(scope="all"), clock=Clock())
+    assert ask(g, snap)[1:] == ("llm", None)
+    assert len(made) == 1 and made[0]["max_retries"] == 0
+
+
+# ---- missing IP header (M4) ----------------------------------------------------
+
+def test_missing_ip_header_skips_check_and_is_counted(snap):
+    g, gen, _ = make(BriefSettings(scope="all", daily_cap=50, ip_header="X-Forwarded-For"))
+    s = six(snap)
+    for i in range(5):
+        assert ask(g, s[i], ip=None if i % 2 else "  ")[1:] == ("llm", None)
+    assert gen.calls == 5 and g.status()["ip_header_missing"] == 5
+    g2, _, _ = make(BriefSettings(scope="all"))
+    ask(g2, snap)
+    assert g2.status()["ip_header_missing"] == 0
+
+
+# ---- persisted daily count (M1) ------------------------------------------------
+
+def test_usage_file_survives_restart(snap, tmp_path):
+    f = tmp_path / "brief_usage.json"
+    clock = Clock()
+    g, _gen, _ = make(BriefSettings(scope="all", daily_cap=2), clock=clock, usage_path=f)
+    ask(g, snap)
+    assert json.loads(f.read_text())["used"] == 1 and not (tmp_path / "brief_usage.json.tmp").exists()
+    g2, gen2, _ = make(BriefSettings(scope="all", daily_cap=2), clock=clock, usage_path=f)
+    assert g2.status()["used_today"] == 1
+    ask(g2, other_snap(snap))
+    g3, gen3, _ = make(BriefSettings(scope="all", daily_cap=2), clock=clock, usage_path=f)
+    assert ask(g3, snap)[1:] == ("template", "daily_cap") and gen3.calls == 0
+
+
+def test_corrupt_usage_file_fails_closed(snap, tmp_path):
+    f = tmp_path / "brief_usage.json"
+    for junk in ("{not json", '{"date": "2023-11-14"}', '{"date": "2023-11-14", "used": -1}'):
+        f.write_text(junk)
+        g, gen, _ = make(BriefSettings(scope="all", daily_cap=5), usage_path=f)
+        assert ask(g, snap)[1:] == ("template", "daily_cap") and gen.calls == 0
+        st = g.status()
+        assert st["usage_file_issue"] is True and st["used_today"] >= 5
+
+
+def test_usage_file_other_date_is_fresh_and_missing_is_fresh(snap, tmp_path):
+    f = tmp_path / "brief_usage.json"
+    f.write_text(json.dumps({"date": "2001-01-01", "used": 99}))
+    g, gen, _ = make(BriefSettings(scope="all", daily_cap=1), usage_path=f)
+    assert g.status()["used_today"] == 0 and g.status()["usage_file_issue"] is False
+    assert ask(g, snap)[1:] == ("llm", None)
+    assert json.loads(f.read_text())["date"] == "2023-11-14"
+    g2, _, _ = make(BriefSettings(scope="all"), usage_path=tmp_path / "nope.json")
+    assert g2.status()["used_today"] == 0

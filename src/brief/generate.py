@@ -71,6 +71,7 @@ def generate_brief(
     snapshot: BriefSnapshot,
     *,
     mode: Literal["auto", "template", "llm"] = "auto",
+    max_retries: int = CLIENT_MAX_RETRIES,
 ) -> tuple[str, str]:
     """Return (brief_text, source_tag) where source_tag is 'template' or 'llm'."""
     if mode == "template":
@@ -95,7 +96,7 @@ def generate_brief(
     )
     try:
         client = anthropic.Anthropic(
-            api_key=api_key, timeout=CLIENT_TIMEOUT_SEC, max_retries=CLIENT_MAX_RETRIES
+            api_key=api_key, timeout=CLIENT_TIMEOUT_SEC, max_retries=max_retries
         )
         response = client.messages.create(
             model=MODEL,

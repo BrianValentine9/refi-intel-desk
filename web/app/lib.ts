@@ -114,6 +114,7 @@ export function aiReasonNote(reason: string | null | undefined): string | null {
     case "busy": return "AI brief busy; showing the template brief.";
     case "cooldown":
     case "ip_limit": return "AI brief unavailable right now; showing the template brief.";
+    case "eval_fail": return "AI brief did not pass its checks; showing the template brief.";
     case "scope": return "The AI brief covers the default assumptions; showing the template brief for yours.";
     default: return null;
   }
