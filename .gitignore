@@ -55,3 +55,10 @@ files.zip
 *conversation*.txt
 *transcript*.txt
 *Transcript*.txt
+
+# --- Front end (web/) ---
+web/node_modules/
+web/.next/
+web/out/
+web/next-env.d.ts
+web/*.tsbuildinfo

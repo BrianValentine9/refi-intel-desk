@@ -1,0 +1,138 @@
+:root {
+  --paper: #f4f2ea;
+  --surface: #ffffff;
+  --surface-2: #efece1;
+  --ink: #15160f;
+  --ink-2: #3c3e33;
+  --muted: #6a6c5e;
+  --line: rgba(21, 22, 15, 0.12);
+  --line-2: rgba(21, 22, 15, 0.2);
+  --accent: #a9cd2f;
+  --accent-2: #93b524;
+  --accent-ink: #151a08;
+  --accent-text: #506e14;
+  /* Rising rate: a muted brick red, readable on white (about 6:1). Always paired with an arrow and a sign. */
+  --rise-text: #9c3b2e;
+  --series-va: #5f7c93;
+  --series-fha: #c08a2f;
+  --series-treasury: #8a8d7f;
+  --grid: #e4e1d6;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: "SFMono-Regular", "Cascadia Code", "Cascadia Mono", Consolas, "Roboto Mono", ui-monospace, Menlo, monospace;
+  --gutter: 16px;
+  color-scheme: light;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 3px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.wrap {
+  max-width: 1160px;
+  margin: 0 auto;
+  padding: 0 var(--gutter) 2rem;
+  border-top: 3px solid var(--accent);
+}
+@media (min-width: 720px) {
+  .wrap { padding-left: clamp(1.15rem, 5vw, 2.75rem); padding-right: clamp(1.15rem, 5vw, 2.75rem); }
+}
+
+.masthead { padding: 1.25rem 0 1rem; }
+.masthead h1 {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: clamp(1.4rem, 4vw, 2rem);
+  font-weight: 700;
+  letter-spacing: 3px;
+  color: var(--accent-text);
+}
+.masthead .subtitle { margin: 0.25rem 0 0; color: var(--ink-2); }
+.masthead .asof { margin: 0.25rem 0 0; color: var(--muted); font-family: var(--mono); font-size: 0.85rem; }
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin: 0.5rem 0 1.5rem;
+}
+@media (min-width: 720px) { .tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+
+.tile {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.8rem 0.9rem;
+  min-width: 0;
+}
+.tile .label {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+.tile .value {
+  margin-top: 0.2rem;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: clamp(1.3rem, 3vw, 1.7rem);
+  font-weight: 700;
+}
+.tile .delta { margin-top: 0.1rem; font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 0.9rem; }
+.delta.down { color: var(--accent-text); }
+.delta.up { color: var(--rise-text); }
+.delta.flat { color: var(--muted); }
+.delta-note { color: var(--muted); font-size: 0.75rem; font-family: var(--sans); }
+
+.skeleton { display: block; border-radius: 3px; background: var(--surface-2); animation: pulse 1.4s ease-in-out infinite; }
+.skeleton.line { height: 1rem; margin-top: 0.5rem; }
+.skeleton.big { height: 1.9rem; margin-top: 0.4rem; width: 70%; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-left: 4px solid var(--accent);
+  border-radius: 6px;
+  padding: 1rem 1.1rem;
+  margin: 0.5rem 0 1.5rem;
+}
+.panel h2 { margin: 0 0 0.3rem; font-size: 1.05rem; }
+.panel p { margin: 0 0 0.6rem; color: var(--ink-2); }
+
+.btn {
+  min-height: 2.75rem;
+  padding: 0.55rem 1.1rem;
+  border: 0;
+  border-radius: 2px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.btn:hover { background: var(--accent-2); }
+
+/* U3 sections (ladder, rung detail, brief, chart, footer) get their styles below. */

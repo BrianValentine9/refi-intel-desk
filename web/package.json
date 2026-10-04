@@ -1,0 +1,23 @@
+{
+  "name": "trigger-ladder-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Trigger Ladder front end (static export, served by the API app)",
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "scripts": {
+    "build": "next build"
+  },
+  "dependencies": {
+    "next": "16.3.8",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "typescript": "^5.9.0"
+  }
+}

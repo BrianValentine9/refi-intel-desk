@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
+import os
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -19,6 +20,7 @@ from typing import Any, Callable
 from fastapi import FastAPI, Request
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
 
 from evals.verify import verify_brief
 from src.api import inputs
@@ -46,6 +48,26 @@ METRIC_SPEC = (
 )
 CHART_SERIES = (da.TREASURY, da.VA_INDEX, da.FHA_INDEX)
 DEFAULT_DAYS = 90
+DEFAULT_WEB_DIST = Path(__file__).resolve().parents[2] / "web" / "out"
+IMMUTABLE_CACHE = "public, max-age=31536000, immutable"
+
+
+def web_dist_dir() -> Path:
+    """Where the front-end export lives: env WEB_DIST, else <repo>/web/out."""
+    raw = os.environ.get("WEB_DIST")
+    return Path(raw) if raw else DEFAULT_WEB_DIST
+
+
+class WebFiles(StaticFiles):
+    """The static export with cache headers: hashed build assets are immutable, HTML is never stale."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        if response.status_code == 200 and path.replace("\\", "/").startswith("_next/static/"):
+            response.headers["Cache-Control"] = IMMUTABLE_CACHE
+        elif response.headers.get("content-type", "").startswith("text/html"):
+            response.headers["Cache-Control"] = "no-cache"  # pages, and the 404 page
+        return response
 
 
 def clean(obj: Any) -> Any:
@@ -429,6 +451,11 @@ def create_app(
             "trigger_rate": rungs[idx].trigger_rate,
             "as_of": v.as_of,
         })
+
+    # Last on purpose: every /api/* route and /_stcore/health above must match first.
+    dist = web_dist_dir()
+    if dist.is_dir():
+        app.mount("/", WebFiles(directory=dist, html=True), name="web")
 
     return app
 
