@@ -151,4 +151,4 @@ All data comes from **public sources only** — FRED (Federal Reserve) and Fredd
 
 ## About
 
-Built by a mortgage professional with 34 years in lending and 12-state licensure, as an exploration of AI engineering applied to deep domain knowledge. The aim is to show what happens when subject-matter expertise and modern AI tooling meet on a real-world problem.
+Built by a mortgage professional with 34 years in real estate and mortgage, with 12-state licensure, as an exploration of AI engineering applied to deep domain knowledge. The aim is to show what happens when subject-matter expertise and modern AI tooling meet on a real-world problem.
