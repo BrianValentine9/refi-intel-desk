@@ -13,6 +13,7 @@ import dataclasses
 import math
 import threading
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Callable
 
 from fastapi import FastAPI, Request
@@ -24,11 +25,10 @@ from src.api import inputs
 from src.api.compute import (
     DEFAULT_COST_BP,
     DEFAULT_THRESHOLD,
-    ERROR_COOLDOWN_SEC,
     LadderService,
     default_rung_index,
 )
-from src.api.refresh import RefreshScheduler
+from src.api.refresh import RefreshScheduler, discard_db_file, make_candidate, next_generation_path
 from src.app import bootstrap
 from src.app import data_access as da
 from src.brief.generate import generate_brief
@@ -65,25 +65,50 @@ def _json(body: Any, status: int = 200, headers: dict | None = None) -> JSONResp
     return JSONResponse(clean(body), status_code=status, headers=headers)
 
 
+@dataclasses.dataclass(frozen=True)
+class DataVersion:
+    """One immutable (database file, as-of) pair. Handlers capture it once per request."""
+
+    db_path: Path
+    as_of: str
+
+
 class AppState:
-    """Mutable app facts. ``as_of`` is the current as-of; it moves only after the new
-    default ladder is ready."""
+    """Mutable app facts. ``version`` is swapped atomically (under ``lock``) and only after
+    the new version's default ladder is ready."""
 
     def __init__(self) -> None:
-        self.ready = False
-        self.as_of: str | None = None
+        self.version: DataVersion | None = None
+        self.base_path: Path | None = None
+        self.paths: dict[str, Path] = {}  # as_of -> DB file holding that as-of (service lookups)
+        self.generations: list[Path] = []  # files made by refresh, oldest first (current last)
+        self.leftovers: list[Path] = []  # discarded files Windows would not delete yet
         self.loans: list = []
         self.service: LadderService | None = None
         self.scheduler: RefreshScheduler | None = None
+        self.stopping = False
         self.lock = threading.Lock()
 
+    @property
+    def ready(self) -> bool:
+        return self.version is not None
 
-def _connect():
-    return db.connect(da.db_path(), ensure_schema=False, timeout=DB_TIMEOUT_SEC)
+    @property
+    def as_of(self) -> str | None:
+        v = self.version
+        return v.as_of if v else None
+
+    def path_for(self, as_of: str) -> Path:
+        with self.lock:
+            return self.paths[as_of]
 
 
-def _load_loans() -> list:
-    conn = _connect()
+def _connect(path: Path):
+    return db.connect(path, ensure_schema=False, timeout=DB_TIMEOUT_SEC)
+
+
+def _load_loans(path: Path) -> list:
+    conn = _connect(path)
     try:
         loans = pool.load_pool(conn)
     finally:
@@ -91,27 +116,77 @@ def _load_loans() -> list:
     return loans or pool.generate_pool(pool.DEFAULT_SEED)
 
 
-def _apply_refresh(state: AppState, ready: bool, as_of: str | None) -> None:
-    """Scheduler callback: adopt a new as-of only once its default ladder is ready."""
-    if not ready or not as_of:
-        return
+def _new_service(state: AppState) -> LadderService:
+    return LadderService(loans=state.loans, connect_for=lambda as_of: _connect(state.path_for(as_of)))
+
+
+def _adopt_first(state: AppState, as_of: str) -> str:
+    """The DB became ready after start-up: build the service and publish the first version."""
+    path = state.base_path
     with state.lock:
-        if state.service is None:  # the DB became ready after start-up
-            state.loans = _load_loans()
-            state.service = LadderService(loans=state.loans, connect=_connect)
+        if state.stopping or state.version is not None:
+            return "skipped"
+    loans = _load_loans(path)
+    with state.lock:
+        if state.stopping:  # shut down while loading: never create a service now
+            return "skipped"
+        state.loans = loans
+        state.paths[as_of] = path
+        if state.service is None:
+            state.service = _new_service(state)
         service = state.service
-        if as_of == state.as_of:
-            return
-    if service.set_as_of(as_of, SET_AS_OF_TIMEOUT_SEC):
-        state.as_of = as_of
-        state.ready = True
+    if not service.set_as_of(as_of, SET_AS_OF_TIMEOUT_SEC):
+        return "default ladder not ready"
+    with state.lock:
+        if not state.stopping:
+            state.version = DataVersion(path, as_of)
+    return "ok"
+
+
+def _refresh_once(state: AppState) -> str:
+    """One refresh run (scheduler thread). Returns a short result note; errors propagate."""
+    for old in list(state.leftovers):  # retry files a previous run could not delete
+        if discard_db_file(old):
+            state.leftovers.remove(old)
+    cur = state.version
+    if cur is None:
+        ready, as_of = bootstrap.ensure_database()
+        return _adopt_first(state, as_of) if ready and as_of else "not ready"
+    dest = next_generation_path(state.base_path)
+    cand = make_candidate(cur.db_path, cur.as_of, dest)
+    if cand is None:
+        return "no change"
+    new_path, new_as_of = cand
+    with state.lock:
+        if state.stopping or state.service is None:
+            discard_db_file(new_path)
+            return "skipped"
+        state.paths[new_as_of] = new_path
+        service = state.service
+    # The new default ladder is computed against the new file; nothing is served from it yet.
+    ok = service.set_as_of(new_as_of, SET_AS_OF_TIMEOUT_SEC)
+    with state.lock:
+        if ok and not state.stopping:
+            state.version = DataVersion(new_path, new_as_of)
+            state.generations.append(new_path)
+            stale = state.generations[:-2]  # keep the current and the previous generation
+            del state.generations[:-2]
+            for p in stale:
+                state.paths = {k: v for k, v in state.paths.items() if v != p}
+            gone = [p for p in stale if not discard_db_file(p)]
+            state.leftovers.extend(gone)
+            return "swapped"
+        state.paths.pop(new_as_of, None)
+    if not discard_db_file(new_path):
+        state.leftovers.append(new_path)
+    return "new default ladder not ready" if not ok else "skipped"
 
 
 def create_app(
     *,
     ladder_service: LadderService | None = None,
     start_background: bool = True,
-    refresh_run: Callable[[], tuple[bool, str | None]] | None = None,
+    refresh_run: Callable[[], object] | None = None,
     refresh_interval: float | None = None,
     refresh_first_delay: float | None = None,
 ) -> FastAPI:
@@ -120,19 +195,19 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         # Synchronous part: stays fast, uvicorn serves nothing until it returns.
+        state.base_path = da.db_path()
         ready, as_of = bootstrap.prepare_database()
-        state.ready, state.as_of = ready, as_of
         if ladder_service is not None:
             state.service = ladder_service
-        if ready:
+        if ready and as_of:
+            state.paths[as_of] = state.base_path
+            state.version = DataVersion(state.base_path, as_of)
             if state.service is None:
-                state.loans = _load_loans()
-                state.service = LadderService(loans=state.loans, connect=_connect)
+                state.loans = _load_loans(state.base_path)
+                state.service = _new_service(state)
             state.service.warm_default(as_of)  # enqueue only; the worker computes
         if start_background:
-            kw: dict[str, Any] = {"on_result": lambda r, a: _apply_refresh(state, r, a)}
-            if refresh_run is not None:
-                kw["run_fn"] = refresh_run
+            kw: dict[str, Any] = {"run_fn": refresh_run or (lambda: _refresh_once(state))}
             if refresh_interval is not None:
                 kw["interval"] = refresh_interval
             if refresh_first_delay is not None:
@@ -142,6 +217,8 @@ def create_app(
         try:
             yield
         finally:
+            with state.lock:
+                state.stopping = True
             if state.scheduler is not None:
                 state.scheduler.stop()
             if state.service is not None:
@@ -156,23 +233,24 @@ def create_app(
         return JSONResponse({"detail": str(exc)}, status_code=422)
 
     # ---- helpers -----------------------------------------------------------
-    def status_body() -> dict:
-        service, as_of = state.service, state.as_of
+    def status_body(v: DataVersion | None) -> dict:
+        service = state.service
         warm = False
-        if service is not None and as_of:
-            warm = service.peek(service.default_key(as_of)).status == "ready"
+        if service is not None and v is not None:
+            warm = service.peek(service.default_key(v.as_of)).status == "ready"
         sched = state.scheduler
         return {
-            "ready": bool(state.ready and as_of),
-            "as_of": as_of,
+            "ready": v is not None,
+            "as_of": v.as_of if v else None,
             "ladder_warm": warm,
             "refresh": {
                 "last_run_at": sched.last_run_at if sched else None,
                 "last_result": sched.last_result if sched else None,
+                "in_progress": bool(sched and sched.in_progress),
             },
         }
 
-    def metrics_body(conn) -> dict:
+    def metrics_body(conn, v: DataVersion) -> dict:
         tiles = []
         for sid, label in METRIC_SPEC:
             latest = da.get_latest(conn, sid)
@@ -182,41 +260,43 @@ def create_app(
                 "value": latest[1] if latest else None,
                 "delta_7d": da.delta_vs_prior(conn, sid, 7) if latest else None,
             })
-        return {"as_of": state.as_of, "tiles": tiles}
+        return {"as_of": v.as_of, "tiles": tiles}
 
-    def series_body(conn, days: int) -> dict:
+    def series_body(conn, v: DataVersion, days: int) -> dict:
         return {
-            "as_of": state.as_of,
+            "as_of": v.as_of,
             "days": days,
             "series": {sid: [list(r) for r in da.get_range(conn, sid, days)] for sid in CHART_SERIES},
         }
 
-    def ladder_body(outcome, cost_bp: int, threshold: int) -> dict:
-        v = outcome.value
+    def ladder_body(outcome, v: DataVersion, cost_bp: int, threshold: int) -> dict:
+        r = outcome.value
         return {
             "status": "ready",
-            "as_of": state.as_of,
+            "as_of": v.as_of,
             "cost_bp": cost_bp,
             "threshold": threshold,
-            "current_va": v.current_va,
-            "current_fha": v.current_fha,
-            "default_rung": default_rung_index(v.rungs),
-            "rungs": [{"index": i, **dataclasses.asdict(r)} for i, r in enumerate(v.rungs)],
+            "current_va": r.current_va,
+            "current_fha": r.current_fha,
+            "default_rung": default_rung_index(r.rungs),
+            "rungs": [{"index": i, **dataclasses.asdict(x)} for i, x in enumerate(r.rungs)],
         }
 
     def not_ready_response():
         return _json({"status": "not_ready"}, 503, {"Retry-After": "30"})
 
-    def is_not_ready() -> bool:
-        return not (state.ready and state.as_of and state.service is not None)
+    def current() -> tuple[DataVersion, LadderService] | None:
+        """The version and service for this request, captured once (None while not ready)."""
+        v, service = state.version, state.service
+        return (v, service) if v is not None and service is not None else None
 
-    def not_ok(outcome):
+    def not_ok(outcome, service):
         """A non-ready outcome as a response (202 / 503)."""
         st = outcome.status
         if st == "busy":
             return _json({"status": "busy"}, 503, {"Retry-After": "2"})
         if st == "error":
-            wait = state.service.retry_after(outcome.key) if state.service else int(ERROR_COOLDOWN_SEC)
+            wait = service.retry_after(outcome.key)
             return _json({"status": "error", "message": outcome.message}, 503, {"Retry-After": str(wait)})
         if st == "closed":
             return _json({"status": "closed"}, 503, {"Retry-After": "5"})
@@ -239,71 +319,81 @@ def create_app(
 
     @app.get("/api/status")
     def status():
-        return _json(status_body())
+        return _json(status_body(state.version))
 
     @app.get("/api/metrics")
     def metrics():
-        if is_not_ready():
+        cur = current()
+        if cur is None:
             return not_ready_response()
-        conn = _connect()
+        v, _service = cur
+        conn = _connect(v.db_path)
         try:
-            return _json(metrics_body(conn))
+            return _json(metrics_body(conn, v))
         finally:
             conn.close()
 
     @app.get("/api/series")
     def series(days: str | None = None):
         n = inputs.parse_days(days if days is not None else DEFAULT_DAYS)
-        if is_not_ready():
+        cur = current()
+        if cur is None:
             return not_ready_response()
-        conn = _connect()
+        v, _service = cur
+        conn = _connect(v.db_path)
         try:
-            return _json(series_body(conn, n))
+            return _json(series_body(conn, v, n))
         finally:
             conn.close()
 
     @app.get("/api/ladder")
     def ladder(cost_bp: str | None = None, threshold: str | None = None):
         bp, thr = parse_ladder_inputs(cost_bp, threshold)
-        if is_not_ready():
+        cur = current()
+        if cur is None:
             return not_ready_response()
-        outcome = state.service.request(state.as_of, bp, thr)
+        v, service = cur
+        outcome = service.request(v.as_of, bp, thr)
         if outcome.status != "ready":
-            return not_ok(outcome)
-        return _json(ladder_body(outcome, bp, thr))
+            return not_ok(outcome, service)
+        return _json(ladder_body(outcome, v, bp, thr))
 
     @app.get("/api/bootstrap")
     def bootstrap_all():
-        if is_not_ready():
-            return _json({"status": status_body(), "metrics": None, "series": None,
+        cur = current()
+        if cur is None:
+            return _json({"status": status_body(state.version), "metrics": None, "series": None,
                           "ladder": {"status": "not_ready"}})
-        conn = _connect()
+        v, service = cur
+        conn = _connect(v.db_path)
         try:
-            metrics_part = metrics_body(conn)
-            series_part = series_body(conn, DEFAULT_DAYS)
+            metrics_part = metrics_body(conn, v)
+            series_part = series_body(conn, v, DEFAULT_DAYS)
         finally:
             conn.close()
-        outcome = state.service.request(state.as_of, DEFAULT_COST_BP, DEFAULT_THRESHOLD)
+        outcome = service.request(v.as_of, DEFAULT_COST_BP, DEFAULT_THRESHOLD)
         if outcome.status == "ready":
-            ladder_part = ladder_body(outcome, DEFAULT_COST_BP, DEFAULT_THRESHOLD)
+            ladder_part = ladder_body(outcome, v, DEFAULT_COST_BP, DEFAULT_THRESHOLD)
         else:
             ladder_part = {"status": "computing"}
-        return _json({"status": status_body(), "metrics": metrics_part, "series": series_part,
+        return _json({"status": status_body(v), "metrics": metrics_part, "series": series_part,
                       "ladder": ladder_part})
 
     @app.get("/api/brief")
     def brief(cost_bp: str | None = None, threshold: str | None = None, rung: str | None = None):
         bp, thr = parse_ladder_inputs(cost_bp, threshold)
         idx = inputs.parse_rung(0 if rung is None else rung)
-        if is_not_ready():
+        cur = current()
+        if cur is None:
             return not_ready_response()
-        outcome = state.service.request(state.as_of, bp, thr)
+        v, service = cur
+        outcome = service.request(v.as_of, bp, thr)
         if outcome.status != "ready":
-            return not_ok(outcome)
+            return not_ok(outcome, service)
         rungs = outcome.value.rungs
         if idx >= len(rungs):
             raise inputs.InputError(f"rung must be between 0 and {len(rungs) - 1}")
-        conn = _connect()
+        conn = _connect(v.db_path)  # the same file the rungs were computed from
         try:
             snapshot = build_snapshot(
                 conn,
@@ -328,7 +418,7 @@ def create_app(
             "brief": text,
             "rung": idx,
             "trigger_rate": rungs[idx].trigger_rate,
-            "as_of": state.as_of,
+            "as_of": v.as_of,
         })
 
     return app

@@ -157,7 +157,7 @@ def test_status_metrics_series_shapes(client_for):
     wait_ready(c)
     st = c.get("/api/status").json()
     assert st["ready"] is True and st["as_of"] and st["ladder_warm"] is True
-    assert set(st["refresh"]) == {"last_run_at", "last_result"}
+    assert set(st["refresh"]) == {"last_run_at", "last_result", "in_progress"}
     m = c.get("/api/metrics").json()
     assert m["as_of"] == st["as_of"]
     assert [(t["id"], t["label"]) for t in m["tiles"]] == [
@@ -341,27 +341,181 @@ def test_scheduler_one_at_a_time_and_swallows_errors():
     assert len(runs) == n  # stopped
 
 
-def test_refresh_as_of_change_swaps_after_new_default_ready(client_for):
-    answer = [(True, None)]
-    c, fake, _svc = client_for(Fake(), start_background=True, refresh_first_delay=3600,
-                               refresh_interval=3600, refresh_run=lambda: answer[0])
+def _gen_files(db_path):
+    """Generation files next to the working DB (everything except the base file and its sidecars)."""
+    return sorted(p.name for p in db_path.parent.iterdir()
+                  if p.name != db_path.name and not p.name.startswith(db_path.name + "-"))
+
+
+def _later(as_of, days=3):
+    from datetime import date, timedelta
+    return (date.fromisoformat(as_of) + timedelta(days=days)).isoformat()
+
+
+@pytest.fixture
+def refresh_env(monkeypatch):
+    """A fake FRED key (never used for a network call: ingest.run is replaced) and no throttle."""
+    from src.data import ingest
+
+    monkeypatch.setenv("FRED_API_KEY", "fake-key-not-used")
+    state = {"mode": "move", "calls": 0}
+
+    def fake_ingest(series_ids, *, db_path, **kw):
+        import sqlite3
+        state["calls"] += 1
+        monkeypatch.setattr(bootstrap, "_last_refresh_attempt", None)  # allow the next run in tests
+        if state["mode"] == "noop":
+            return []
+        conn = sqlite3.connect(db_path)
+        try:
+            from src.app import data_access as da
+            latest = [conn.execute("SELECT obs_date, value FROM observations WHERE series_id=? AND value IS NOT NULL "
+                                   "ORDER BY obs_date DESC LIMIT 1", (s,)).fetchone() for s in da.REQUIRED_SERIES]
+            new = _later(max(d for d, _ in latest))
+            for sid, (_d, v) in zip(da.REQUIRED_SERIES, latest):
+                conn.execute("INSERT INTO observations(series_id, obs_date, value) VALUES (?,?,?)", (sid, new, round(v + 0.30, 3)))
+            conn.commit()
+        finally:
+            conn.close()
+        if state["mode"] == "fail":
+            raise RuntimeError("ingest blew up")
+        return []
+
+    monkeypatch.setattr(ingest, "run", fake_ingest)
+    monkeypatch.setattr(bootstrap, "_last_refresh_attempt", None)
+    return state
+
+
+def snapshot_views(c):
+    return {
+        "status": c.get("/api/status").json(),
+        "metrics": c.get("/api/metrics").json(),
+        "series": c.get("/api/series").json(),
+        "brief": c.get("/api/brief").json(),
+        "ladder": c.get("/api/ladder").json(),
+    }
+
+
+def test_refresh_serves_one_consistent_version_until_new_ladder_ready(client_for, seed_db, refresh_env):
+    c, fake, _svc = client_for(Fake(), start_background=True, refresh_first_delay=3600, refresh_interval=3600)
+    wait_ready(c)
+    before = snapshot_views(c)
+    old = before["status"]["as_of"]
+    old_vals = [t["value"] for t in before["metrics"]["tiles"]]
+    assert before["brief"]["passed"] and f"As of {old}" in before["brief"]["brief"]
+
+    fake.gate.clear()  # hold the new default ladder
+    sched = c.app.state.api.scheduler
+    t = threading.Thread(target=sched.run_once)
+    t.start()
+    for _ in range(100):
+        if sched.in_progress and len(_gen_files(seed_db)) == 1 and fake.calls:
+            break
+        time.sleep(0.05)
+    time.sleep(0.3)
+    during = snapshot_views(c)
+    assert during["status"]["refresh"]["in_progress"] is True
+    assert {k: v["as_of"] for k, v in during.items() if "as_of" in v} == {k: old for k in ("status", "metrics", "series", "brief", "ladder")}
+    assert [t_["value"] for t_ in during["metrics"]["tiles"]] == old_vals
+    assert during["series"]["series"]["DGS10"][-1][0] <= old
+    assert during["brief"]["passed"] and f"As of {old}" in during["brief"]["brief"]
+    assert during["brief"]["brief"] == before["brief"]["brief"]
+
+    fake.gate.set()
+    t.join(10)
+    after = snapshot_views(c)
+    new = _later(old)
+    assert {k: v["as_of"] for k, v in after.items()} == {k: new for k in after}
+    assert [t_["value"] for t_ in after["metrics"]["tiles"]] == [round(v + 0.30, 3) for v in old_vals]
+    assert after["series"]["series"]["DGS10"][-1][0] == new
+    assert after["brief"]["passed"], (after["brief"]["errors"], after["brief"]["brief"])
+    assert f"As of {new}" in after["brief"]["brief"]
+    assert after["status"]["refresh"] == {"last_run_at": after["status"]["refresh"]["last_run_at"],
+                                          "last_result": "swapped", "in_progress": False}
+    assert after["status"]["ladder_warm"] is True
+    # the working DB the app started on was never written to
+    import sqlite3
+    conn = sqlite3.connect(seed_db)
+    assert conn.execute("SELECT COUNT(*) FROM observations WHERE obs_date=?", (new,)).fetchone()[0] == 0
+    conn.close()
+
+
+def test_refresh_unchanged_as_of_discards_new_file(client_for, seed_db, refresh_env):
+    refresh_env["mode"] = "noop"
+    c, fake, _svc = client_for(Fake(), start_background=True, refresh_first_delay=3600)
     wait_ready(c)
     old = c.get("/api/status").json()["as_of"]
-    fake.gate.clear()  # hold the new default ladder
-    answer[0] = (True, "2099-01-01")
-    t = threading.Thread(target=c.app.state.api.scheduler.run_once)
-    t.start()
-    time.sleep(0.3)
-    assert c.get("/api/status").json()["as_of"] == old  # still the old as-of while the new default computes
-    assert c.get("/api/ladder").json()["as_of"] == old
-    fake.gate.set()
-    t.join(5)
+    sched = c.app.state.api.scheduler
+    sched.run_once()
+    assert refresh_env["calls"] == 1 and sched.last_result == "no change"
+    assert c.get("/api/status").json()["as_of"] == old and _gen_files(seed_db) == []
+
+
+def test_refresh_ingest_failure_keeps_old_version(client_for, seed_db, refresh_env):
+    refresh_env["mode"] = "fail"
+    c, fake, _svc = client_for(Fake(), start_background=True, refresh_first_delay=3600)
+    wait_ready(c)
+    old = c.get("/api/status").json()["as_of"]
+    sched = c.app.state.api.scheduler
+    sched.run_once()
+    assert sched.last_result == "error: RuntimeError"
     st = c.get("/api/status").json()
-    assert st["as_of"] == "2099-01-01" and st["refresh"]["last_result"] == "ok" and st["ladder_warm"] is True
-    assert c.get("/api/ladder").json()["as_of"] == "2099-01-01"
+    assert st["as_of"] == old and st["refresh"]["in_progress"] is False
+    assert _gen_files(seed_db) == []
+    assert c.get("/api/brief").json()["passed"] is True
 
 
-def test_real_refresh_path_with_no_key_makes_no_network_call(seed_db, monkeypatch):
+def test_refresh_set_as_of_timeout_keeps_old_version(client_for, seed_db, refresh_env, monkeypatch):
+    from src.api import app as app_mod
+    monkeypatch.setattr(app_mod, "SET_AS_OF_TIMEOUT_SEC", 0.3)
+    c, fake, _svc = client_for(Fake(), start_background=True, refresh_first_delay=3600)
+    wait_ready(c)
+    old = c.get("/api/status").json()["as_of"]
+    vals = [t["value"] for t in c.get("/api/metrics").json()["tiles"]]
+    fake.gate.clear()  # the new default ladder never finishes in time
+    sched = c.app.state.api.scheduler
+    sched.run_once()
+    assert sched.last_result == "new default ladder not ready"
+    assert c.get("/api/status").json()["as_of"] == old
+    assert [t["value"] for t in c.get("/api/metrics").json()["tiles"]] == vals
+    assert _gen_files(seed_db) == []
+    fake.gate.set()
+
+
+def test_refresh_keeps_only_two_generations(client_for, seed_db, refresh_env):
+    c, fake, _svc = client_for(Fake(), start_background=True, refresh_first_delay=3600)
+    wait_ready(c)
+    sched = c.app.state.api.scheduler
+    for _ in range(3):
+        sched.run_once()
+        assert sched.last_result == "swapped"
+    assert len(_gen_files(seed_db)) == 2
+    assert c.get("/api/brief").json()["passed"] is True
+
+
+def test_shutdown_during_refresh_creates_no_service(empty_db, monkeypatch):
+    from src.api import app as app_mod
+    release, entered = threading.Event(), threading.Event()
+
+    def slow_ensure():
+        entered.set()
+        release.wait(5)
+        return True, "2026-07-29"
+
+    monkeypatch.setattr(bootstrap, "ensure_database", slow_ensure)
+    app = create_app(start_background=False)
+    with TestClient(app):
+        state = app.state.api
+        assert state.service is None and state.version is None
+        t = threading.Thread(target=app_mod._refresh_once, args=(state,))
+        t.start()
+        assert entered.wait(5)
+    release.set()  # the app has shut down; the late refresh must not build anything
+    t.join(5)
+    assert state.service is None and state.version is None and state.stopping is True
+
+
+def test_real_refresh_path_with_no_key_makes_no_network_call(client_for, seed_db, monkeypatch):
     from src.data import ingest
 
     def boom(*a, **k):
@@ -369,10 +523,10 @@ def test_real_refresh_path_with_no_key_makes_no_network_call(seed_db, monkeypatc
 
     monkeypatch.setattr(ingest, "run", boom)
     monkeypatch.setattr(bootstrap, "_last_refresh_attempt", None)
-    s = RefreshScheduler(first_delay=0, interval=3600)  # default run_fn = the bootstrap path
-    assert s.run_once() is True and s.last_result == "ok"
-    monkeypatch.setattr(bootstrap, "_is_stale", lambda as_of: True)  # stale and no key: still a no-op
-    assert bootstrap.ensure_database()[0] is True
+    c, _fake, _svc = client_for(start_background=True, refresh_first_delay=3600)
+    sched = c.app.state.api.scheduler
+    assert sched.run_once() is True and sched.last_result == "no change"
+    assert _gen_files(seed_db) == []
 
 
 # ---- gzip ------------------------------------------------------------------

@@ -69,6 +69,7 @@ class LadderService:
         *,
         loans,
         connect: Callable[[], Any] | None = None,
+        connect_for: Callable[[str], Any] | None = None,
         ladder_fn: Callable[..., tuple] = ladder_mod.build_ladder,
         max_entries: int = 64,
         max_pending: int = 2,
@@ -81,6 +82,7 @@ class LadderService:
             connect = da.connect
         self._loans = loans
         self._connect = connect
+        self._connect_for = connect_for  # as_of -> connection to the DB that holds that as_of
         self._ladder_fn = ladder_fn
         self._max_entries = max_entries
         self._max_pending = max_pending  # counts queued keys, not the one running
@@ -245,8 +247,9 @@ class LadderService:
                 self._cond.notify_all()
 
     def _compute(self, key: Key) -> LadderResult:
-        _as_of, cost_bp, threshold, _seed, step, rate_range = key
-        conn = self._connect()  # fresh connection owned by this worker thread
+        as_of, cost_bp, threshold, _seed, step, rate_range = key
+        # fresh connection owned by this worker thread, to the DB version this key's as_of belongs to
+        conn = self._connect_for(as_of) if self._connect_for is not None else self._connect()
         try:
             rungs, va, fha = self._ladder_fn(
                 self._loans,

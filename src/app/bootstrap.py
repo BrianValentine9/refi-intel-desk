@@ -107,21 +107,33 @@ def _refresh_throttled() -> bool:
     return (time.monotonic() - _last_refresh_attempt) < REFRESH_MIN_INTERVAL_SEC
 
 
+def claim_refresh(as_of: str | None) -> bool:
+    """Gate for any refresh: stale as-of, FRED key present, not throttled.
+
+    True means the caller may pull now (the throttle marker is already set, so a
+    concurrent caller gets False). Used by the Streamlit path and the API's
+    versioned-DB refresh.
+    """
+    global _last_refresh_attempt
+    if not _is_stale(as_of):
+        return False
+    if not os.environ.get("FRED_API_KEY"):
+        return False
+    with _refresh_lock:
+        if _refresh_throttled():
+            return False
+        _last_refresh_attempt = time.monotonic()
+    return True
+
+
 def _maybe_refresh_stale(path: Path, as_of: str | None) -> None:
     """Incremental FRED pull when the working DB is stale, keyed, and not throttled.
 
     Fails open: the throttle marker is set before the pull, and any ingest error is
     swallowed so the app keeps serving the existing data unchanged.
     """
-    global _last_refresh_attempt
-    if not _is_stale(as_of):
+    if not claim_refresh(as_of):
         return
-    if not os.environ.get("FRED_API_KEY"):
-        return
-    with _refresh_lock:
-        if _refresh_throttled():
-            return
-        _last_refresh_attempt = time.monotonic()
     try:
         # Incremental: each series resumes from its latest stored date, so the pull is small.
         ingest.run(all_series_ids(), db_path=path)

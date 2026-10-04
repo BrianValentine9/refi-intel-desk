@@ -9,6 +9,7 @@ from src.brief.snapshot import BriefSnapshot, as_of_mentioned
 
 _PCT = re.compile(r"(?<!\d)(-?\d+\.\d{1,3})%")
 _INT = re.compile(r"\b(\d{1,3}(?:,\d{3})*|\d+)\b")
+_DECIMAL = re.compile(r"(?<![\d,])\d+\.\d+")
 _MONTHS = re.compile(r"(\d+\.\d)\s+months", re.IGNORECASE)
 
 
@@ -61,6 +62,8 @@ def verify_brief(text: str, snapshot: BriefSnapshot) -> EvalResult:
 
     # Strip percentage tokens before integer scan (avoids 250 from 4.250%).
     stripped = _PCT.sub(" ", text)
+    # Unsigned decimals ("0.280 points") are not counts; their fraction digits must not read as one.
+    stripped = _DECIMAL.sub(" ", stripped)
     for match in _MONTHS.finditer(stripped):
         stripped = stripped.replace(match.group(0), " ")
 

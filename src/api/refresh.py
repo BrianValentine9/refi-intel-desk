@@ -1,40 +1,106 @@
 """Background data refresh: one daemon thread, one run at a time, fail open.
 
-A run is the existing bootstrap path (``ensure_database``): it respects the FRED key
-(no key, no network), the 3-day staleness rule and the 3-hour throttle/lock. The
-scheduler itself only decides *when* to run and hands the result to ``on_result``.
+Refreshes never write to the DB the API is serving. A refresh copies the current
+generation to a new file (sqlite backup API, consistent even in WAL mode), ingests into
+the copy, and hands the copy back only if its as-of moved. The app then computes the new
+default ladder against the copy and swaps to it once that is ready.
+
+Gating reuses bootstrap (``claim_refresh``: stale as-of, FRED key present, throttle).
 No web-framework imports.
 """
 
 from __future__ import annotations
 
+import sqlite3
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable
+
+from src.app import bootstrap
+from src.app import data_access as da
+from src.data import db, ingest
+from src.data.series_registry import all_series_ids
 
 REFRESH_INTERVAL_SEC = 3 * 60 * 60
 FIRST_RUN_DELAY_SEC = 5.0
 
 
-def bootstrap_run() -> tuple[bool, str | None]:
-    """The real run: existing bootstrap refresh path, then ``(ready, as_of)``."""
-    from src.app import bootstrap
+def next_generation_path(base: Path) -> Path:
+    """A fresh file name next to the working DB: ``<stem>.<timestamp>[.n]<suffix>``."""
+    stamp = time.strftime("%Y%m%d%H%M%S")
+    n = 0
+    while True:
+        tag = stamp if n == 0 else f"{stamp}.{n}"
+        cand = base.with_name(f"{base.stem}.{tag}{base.suffix}")
+        if not cand.exists():
+            return cand
+        n += 1
 
-    return bootstrap.ensure_database()
+
+def discard_db_file(path: Path) -> bool:
+    """Best-effort delete of a generation file and its sidecars; False if one is stuck."""
+    ok = True
+    for suffix in ("", "-wal", "-shm", "-journal"):
+        p = path.with_name(path.name + suffix)
+        try:
+            p.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:  # Windows: a request may still hold a handle; retry on a later run
+            ok = False
+    return ok
+
+
+def _as_of_of(path: Path) -> str | None:
+    conn = db.connect(path, ensure_schema=False, timeout=5)
+    try:
+        return da.as_of_date(conn)
+    finally:
+        conn.close()
+
+
+def make_candidate(cur_path: Path, cur_as_of: str | None, dest: Path) -> tuple[Path, str] | None:
+    """Pull newer data into a copy of ``cur_path``; return ``(dest, new_as_of)`` or None.
+
+    None means nothing to do: gated off (fresh data, no key, throttled) or the pull
+    did not move the as-of (the copy is discarded). On error the copy is discarded and
+    the error propagates.
+    """
+    if not bootstrap.claim_refresh(cur_as_of):
+        return None
+    try:
+        src = sqlite3.connect(cur_path, timeout=5)
+        try:
+            out = sqlite3.connect(dest)
+            try:
+                src.backup(out)
+            finally:
+                out.close()
+        finally:
+            src.close()
+        ingest.run(all_series_ids(), db_path=dest)  # incremental: resumes from each latest date
+        new_as_of = _as_of_of(dest)
+        if not new_as_of or new_as_of == cur_as_of:
+            discard_db_file(dest)
+            return None
+        db.init_working_db(dest)
+        return dest, new_as_of
+    except BaseException:
+        discard_db_file(dest)
+        raise
 
 
 class RefreshScheduler:
     def __init__(
         self,
         *,
-        run_fn: Callable[[], tuple[bool, str | None]] = bootstrap_run,
-        on_result: Callable[[bool, str | None], None] | None = None,
+        run_fn: Callable[[], object],
         interval: float = REFRESH_INTERVAL_SEC,
         first_delay: float = FIRST_RUN_DELAY_SEC,
     ) -> None:
         self._run_fn = run_fn
-        self._on_result = on_result
         self._interval = interval
         self._first_delay = first_delay
         self._stop = threading.Event()
@@ -42,6 +108,10 @@ class RefreshScheduler:
         self._thread: threading.Thread | None = None
         self.last_run_at: str | None = None
         self.last_result: str | None = None
+
+    @property
+    def in_progress(self) -> bool:
+        return self._run_lock.locked()
 
     def start(self) -> None:
         if self._thread is not None:
@@ -60,12 +130,10 @@ class RefreshScheduler:
             return False
         try:
             try:
-                ready, as_of = self._run_fn()
-                if self._on_result is not None:
-                    self._on_result(ready, as_of)
-                result = "ok"
+                note = self._run_fn()
+                result = note if isinstance(note, str) else "ok"
             except Exception as exc:  # fail open: keep serving the existing data
-                result = f"error: {type(exc).__name__}"
+                result = f"error: {type(exc).__name__}"  # never the message: it can carry a URL with a key
             self.last_result = result
             self.last_run_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
             return True
