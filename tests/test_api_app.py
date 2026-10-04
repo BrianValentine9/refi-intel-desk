@@ -537,3 +537,40 @@ def test_gzip_on_large_response(client_for):
     r = c.get("/api/ladder", headers={"Accept-Encoding": "gzip"})
     assert r.headers.get("content-encoding") == "gzip"
     assert c.get("/api/health", headers={"Accept-Encoding": "gzip"}).headers.get("content-encoding") is None
+
+
+# ---- generation files across restarts, and the ghost-file guard -----------
+
+def test_startup_discards_generation_files_from_a_previous_process(seed_db):
+    stem = seed_db.stem
+    gens = [seed_db.with_name(f"{stem}.20260101000000.db"), seed_db.with_name(f"{stem}.20260102000000.1.db")]
+    keep = [seed_db.with_name(f"{stem}.notes.db"), seed_db.with_name(f"{stem}.2026.db"), seed_db.with_name("other.20260101000000.db")]
+    for p in gens + keep:
+        p.write_bytes(b"x")
+    with TestClient(create_app(start_background=False)) as c:
+        assert c.get("/api/health").status_code == 200
+    assert not any(p.exists() for p in gens)
+    assert all(p.exists() for p in keep) and seed_db.exists()
+
+
+def test_connect_refuses_a_missing_path_without_creating_it(tmp_path):
+    from src.api import app as app_mod
+    ghost = tmp_path / "gone.db"
+    with pytest.raises(FileNotFoundError):
+        app_mod._connect(ghost)
+    assert not ghost.exists()
+
+
+def test_request_on_a_pruned_version_is_503_and_creates_no_file(client_for, seed_db):
+    c, _fake, _svc = client_for()
+    wait_ready(c)
+    seed_db_copy = seed_db.read_bytes()
+    state = c.app.state.api
+    gone = seed_db.with_name("pruned.db")
+    from src.api.app import DataVersion
+    state.version = DataVersion(gone, state.version.as_of)
+    for url in ("/api/metrics", "/api/series", "/api/bootstrap", "/api/brief"):
+        r = c.get(url)
+        assert r.status_code == 503, url
+    assert not gone.exists()
+    assert seed_db.read_bytes() == seed_db_copy

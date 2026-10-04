@@ -28,7 +28,7 @@ from src.api.compute import (
     LadderService,
     default_rung_index,
 )
-from src.api.refresh import RefreshScheduler, discard_db_file, make_candidate, next_generation_path
+from src.api.refresh import RefreshScheduler, discard_db_file, discard_old_generations, make_candidate, next_generation_path
 from src.app import bootstrap
 from src.app import data_access as da
 from src.brief.generate import generate_brief
@@ -104,6 +104,9 @@ class AppState:
 
 
 def _connect(path: Path):
+    # sqlite3.connect would quietly create an empty file at a just-pruned path.
+    if not Path(path).is_file():
+        raise FileNotFoundError(f"database file is gone: {Path(path).name}")
     return db.connect(path, ensure_schema=False, timeout=DB_TIMEOUT_SEC)
 
 
@@ -196,6 +199,7 @@ def create_app(
     async def lifespan(app: FastAPI):
         # Synchronous part: stays fast, uvicorn serves nothing until it returns.
         state.base_path = da.db_path()
+        discard_old_generations(state.base_path)  # files a previous process left behind
         ready, as_of = bootstrap.prepare_database()
         if ladder_service is not None:
             state.service = ladder_service
@@ -227,6 +231,11 @@ def create_app(
     app = FastAPI(title="Trigger Ladder API", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(GZipMiddleware, minimum_size=500)
     app.state.api = state
+
+    @app.exception_handler(FileNotFoundError)
+    async def _file_gone(_request: Request, _exc: FileNotFoundError):
+        # A request raced a swap and the file it captured was pruned: retry sees the new version.
+        return JSONResponse({"status": "not_ready"}, status_code=503, headers={"Retry-After": "1"})
 
     @app.exception_handler(inputs.InputError)
     async def _input_error(_request: Request, exc: inputs.InputError):

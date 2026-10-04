@@ -11,6 +11,7 @@ No web-framework imports.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import threading
 import time
@@ -37,6 +38,27 @@ def next_generation_path(base: Path) -> Path:
         if not cand.exists():
             return cand
         n += 1
+
+
+def discard_old_generations(base: Path) -> list[Path]:
+    """Start-up sweep: delete generation files a previous process left next to ``base``.
+
+    Only names of exactly the form ``<stem>.<14-digit timestamp>[.n]<suffix>`` (plus the
+    sidecars) match; the base file itself never does. Best-effort.
+    """
+    pat = re.compile(
+        rf"{re.escape(base.stem)}\.\d{{14}}(?:\.\d+)?{re.escape(base.suffix)}", re.IGNORECASE
+    )
+    removed: list[Path] = []
+    try:
+        names = [p for p in base.parent.iterdir() if p.is_file()]
+    except OSError:
+        return removed
+    for p in names:
+        if p.name != base.name and pat.fullmatch(p.name):
+            if discard_db_file(p):
+                removed.append(p)
+    return removed
 
 
 def discard_db_file(path: Path) -> bool:

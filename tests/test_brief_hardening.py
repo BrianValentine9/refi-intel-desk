@@ -140,3 +140,42 @@ def test_wrong_rate_and_count_still_fail(snap_and_rungs):
     allowed = snap.allowed_counts()
     wrong = next(n for n in range(1234, 99999) if n not in allowed)
     assert not verify_brief(_brief_with(snap, f"{wrong:,} loans clear as of 2026-06-09."), snap).passed
+
+
+# ---- points values and decimal counts ------------------------------------
+
+def _points_snap(snap):
+    return replace(snap, va_delta_7d=-0.280, fha_delta_7d=0.031, treasury_delta_7d=None)
+
+
+def test_points_values_must_match_a_delta_or_rung_distance(snap_and_rungs):
+    _conn, snap, _rungs = snap_and_rungs
+    snap = _points_snap(snap)
+    dist = snap.market_rung.distance_from_market
+    for ok in ("VA fell 0.280 points over 7 days", "FHA rose 0.031 points", "VA moved -0.28 point",
+               "0.031 percentage points", "0.031 PTS", f"{dist:.3f} points below the index"):
+        r = verify_brief(_brief_with(snap, ok), snap)
+        assert r.passed and r.points_checked == 1, (ok, r.errors)
+        assert "points=1" in r.summary()
+    bad = verify_brief(_brief_with(snap, "VA fell 0.777 points over 7 days"), snap)
+    assert not bad.passed and bad.errors == ["unsupported points value 0.777"]
+
+
+def test_decimal_counts_are_still_scanned(snap_and_rungs):
+    _conn, snap, _rungs = snap_and_rungs
+    allowed = snap.allowed_counts()
+    wrong = next(n for n in range(2999, 99999) if n not in allowed)
+    for text in (f"{wrong}.0 loans clear", f"{wrong}.5 loans clear", f"about {wrong}.0.", "12345.6 loans clear"):
+        assert not verify_brief(_brief_with(snap, text), snap).passed, text
+    n = snap.market_rung.cumulative_count
+    for text in (f"{n:,}.0 loans clear", f"{n:,}."):
+        r = verify_brief(_brief_with(snap, text), snap)
+        assert r.passed, (text, r.errors)
+    # a thousands-style decimal is conservatively read as its fraction digits
+    assert not verify_brief(_brief_with(snap, "2.537 thousand loans clear"), snap).passed
+
+
+def test_basis_points_stay_with_the_count_scan(snap_and_rungs):
+    _conn, snap, _rungs = snap_and_rungs
+    assert verify_brief(_brief_with(snap, "VA moved 31 basis points"), snap).passed
+    assert not verify_brief(_brief_with(snap, "VA moved 280 basis points"), snap).passed

@@ -117,6 +117,19 @@ class BriefSnapshot:
                 values.extend((delta, abs(delta)))
         return {round(v, 3) for v in values}
 
+    def allowed_points(self) -> set[float]:
+        """Values a brief may quote as "N.NNN points": 7-day moves (unsigned) and rung distances."""
+        values = [abs(self.market_rung.distance_from_market), abs(self.selected_rung.distance_from_market)]
+        for delta in (
+            self.treasury_delta_7d,
+            self.va_delta_7d,
+            self.fha_delta_7d,
+            self.conforming_delta_7d,
+        ):
+            if delta is not None:
+                values.append(abs(delta))
+        return {round(v, 3) for v in values}
+
     def allowed_counts(self) -> set[int]:
         """Integer counts the brief may quote."""
         counts = {
