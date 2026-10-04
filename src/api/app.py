@@ -50,6 +50,53 @@ CHART_SERIES = (da.TREASURY, da.VA_INDEX, da.FHA_INDEX)
 DEFAULT_DAYS = 90
 DEFAULT_WEB_DIST = Path(__file__).resolve().parents[2] / "web" / "out"
 IMMUTABLE_CACHE = "public, max-age=31536000, immutable"
+DEFAULT_FRAME_ANCESTORS = "'self' https://brianvalentine.co https://www.brianvalentine.co"
+# Request headers the TEMPORARY staging probe may echo. Nothing else (no cookies, no auth).
+PROBE_HEADERS = ("x-forwarded-for", "x-real-ip", "true-client-ip", "cf-connecting-ip", "forwarded",
+                 "x-forwarded-proto", "x-forwarded-host")
+
+
+def resolve_frame_ancestors(raw: str | None) -> tuple[str, list[str]]:
+    """The frame-ancestors value and any config issue names. A value that could inject another
+    directive or header (``;``, a control character, a comma) falls back to the default."""
+    if raw is None or not raw.strip():
+        return DEFAULT_FRAME_ANCESTORS, []
+    value = raw.strip()
+    if any(ch in value for ch in ";,") or any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+        return DEFAULT_FRAME_ANCESTORS, ["frame_ancestors_invalid"]
+    return value, []
+
+
+def rss_mb() -> float | None:
+    """Resident memory of this process in MB (1 decimal), or None when it cannot be read. Never raises."""
+    try:
+        if os.name == "nt":
+            import ctypes
+            from ctypes import wintypes
+
+            class _PMC(ctypes.Structure):
+                _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+                            ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+                            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                            ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t)]
+
+            pmc = _PMC()
+            pmc.cb = ctypes.sizeof(pmc)
+            k32 = ctypes.windll.kernel32
+            k32.GetCurrentProcess.restype = wintypes.HANDLE
+            psapi = ctypes.windll.psapi
+            psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(_PMC), wintypes.DWORD]
+            if not psapi.GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(pmc), pmc.cb):
+                return None
+            return round(pmc.WorkingSetSize / (1024 * 1024), 1)
+        with open("/proc/self/status", encoding="ascii") as fh:
+            for line in fh:
+                if line.startswith("VmRSS:"):
+                    return round(int(line.split()[1]) / 1024, 1)  # kB to MB
+        return None
+    except Exception:
+        return None
 
 
 def web_dist_dir() -> Path:
@@ -259,6 +306,22 @@ def create_app(
     app.add_middleware(GZipMiddleware, minimum_size=500)
     app.state.api = state
 
+    frame_ancestors, config_issues = resolve_frame_ancestors(os.environ.get("FRAME_ANCESTORS"))
+    csp_value = f"frame-ancestors {frame_ancestors}"
+    probe_on = os.environ.get("RENDER_SERVICE_NAME", "").endswith("-staging") or os.environ.get("HEADER_PROBE") == "1"
+
+    @app.middleware("http")
+    async def _security_headers(request: Request, call_next):
+        # Every response (API, static, 404, 202/503). Deliberately no X-Frame-Options (it cannot
+        # allow a list of sites) and no broader CSP (the static export uses inline scripts).
+        response = await call_next(request)
+        response.headers["Content-Security-Policy"] = csp_value
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        if "x-frame-options" in response.headers:
+            del response.headers["x-frame-options"]
+        return response
+
     @app.exception_handler(FileNotFoundError)
     async def _file_gone(_request: Request, _exc: FileNotFoundError):
         # A request raced a swap and the file it captured was pruned: retry sees the new version.
@@ -282,6 +345,8 @@ def create_app(
             "pool_seed": pool.DEFAULT_SEED if v else None,
             "ladder_warm": warm,
             "brief_ai": guard.status(),
+            "config_issues": list(config_issues),
+            "process": {"rss_mb": rss_mb()},
             "refresh": {
                 "last_run_at": sched.last_run_at if sched else None,
                 "last_result": sched.last_result if sched else None,
@@ -468,6 +533,20 @@ def create_app(
             "trigger_rate": rungs[idx].trigger_rate,
             "as_of": v.as_of,
         })
+
+    if probe_on:
+        # TEMPORARY (U5/U6 staging measurement): shows which client-IP headers Render forwards.
+        # Off unless RENDER_SERVICE_NAME ends with "-staging" or HEADER_PROBE=1 (the live service is
+        # named "trigger-ladder", so it is off there). Remove or disable before cutover (U7).
+        @app.get("/api/_probe/headers")
+        def probe_headers(request: Request):
+            seen = {h: request.headers[h] for h in PROBE_HEADERS if h in request.headers}
+            return _json({"client_host": request.client.host if request.client else None, "headers": seen})
+
+    @app.api_route("/api", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
+    @app.api_route("/api/{rest:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
+    def api_not_found(rest: str = ""):
+        return JSONResponse({"detail": "Not found"}, status_code=404)
 
     # Last on purpose: every /api/* route and /_stcore/health above must match first.
     dist = web_dist_dir()

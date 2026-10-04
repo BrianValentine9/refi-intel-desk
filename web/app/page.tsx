@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import RateChart from "./Chart";
+import { postReady, useEmbed } from "./embed";
 import { PollTimeout, pollJson, useWidth, type WaitInfo } from "./net";
 import {
   COST_DEFAULT, COST_MAX, COST_MIN, DASH, THR_DEFAULT, THR_MAX, THR_MIN,
@@ -41,6 +42,7 @@ function phaseFromWait(w: WaitInfo): Phase {
 }
 
 export default function Page() {
+  const embed = useEmbed();
   const [load, setLoad] = useState<Load>({ kind: "loading" });
   const boot = useRef<Bootstrap | null>(null);
 
@@ -105,6 +107,15 @@ export default function Page() {
   useEffect(() => { run(); }, [run]);
 
   const loadReady = load.kind === "ready";
+
+  // Ready signal to the framing page: once, after the first data paint (tiles rendered).
+  const readySent = useRef(false);
+  useEffect(() => {
+    if (!loadReady || readySent.current) return;
+    readySent.current = true;
+    const id = requestAnimationFrame(() => postReady());
+    return () => cancelAnimationFrame(id);
+  }, [loadReady]);
 
   // ---- ladder for the applied assumptions ------------------------------------
   useEffect(() => {
@@ -190,11 +201,11 @@ export default function Page() {
 
   return (
     <>
-      <div className="accent-bar" aria-hidden="true" />
+      {!embed && <div className="accent-bar" aria-hidden="true" />}
       <main className="wrap" ref={wrapRef}>
         <header className="masthead">
-          <h1>TRIGGER LADDER</h1>
-          <p className="subtitle">VA IRRRL · FHA Streamline opportunity monitor — public data, modeled pools</p>
+          {!embed && <h1>TRIGGER LADDER</h1>}
+          {!embed && <p className="subtitle">VA IRRRL · FHA Streamline opportunity monitor — public data, modeled pools</p>}
           {load.kind === "ready" && (
             <p className="asof">As of {load.asOf} (latest observation in the data)</p>
           )}
@@ -224,6 +235,7 @@ export default function Page() {
         {load.kind === "ready" && (
           <>
             <Assumptions
+              embed={embed}
               poolSize={load.poolSize}
               poolSeed={load.poolSeed}
               applied={applied}
@@ -272,7 +284,7 @@ export default function Page() {
           </>
         )}
 
-        <Footer />
+        <Footer embed={embed} />
       </main>
     </>
   );
@@ -281,11 +293,11 @@ export default function Page() {
 // ---- assumptions ----------------------------------------------------------------
 
 function Assumptions({
-  poolSize, poolSeed, applied, onApply,
-}: { poolSize: number | null; poolSeed: number | null; applied: Applied; onApply: (a: Applied) => void }) {
+  embed, poolSize, poolSeed, applied, onApply,
+}: { embed: boolean; poolSize: number | null; poolSeed: number | null; applied: Applied; onApply: (a: Applied) => void }) {
   // Decided before first paint: open on wide screens, closed on phones. Guarded for the static export.
   const [open, setOpen] = useState<boolean>(() =>
-    typeof window !== "undefined" && typeof window.matchMedia === "function" ? window.matchMedia("(min-width: 720px)").matches : false,
+    !embed && typeof window !== "undefined" && typeof window.matchMedia === "function" ? window.matchMedia("(min-width: 720px)").matches : false,
   );
   const isOpen = open;
   const [cost, setCost] = useState(applied.costBp / 100);
@@ -729,12 +741,14 @@ function TilesSkeleton() {
   );
 }
 
-function Footer() {
+function Footer({ embed }: { embed: boolean }) {
   return (
     <footer className="footer">
-      <p>
-        Built by <a href="https://brianvalentine.co">Brian Valentine</a>
-      </p>
+      {!embed && (
+        <p>
+          Built by <a href="https://brianvalentine.co">Brian Valentine</a>
+        </p>
+      )}
       <p>
         Data source: FRED (Federal Reserve Bank of St. Louis): 10-year Treasury yield and Optimal Blue 30-year VA, FHA and
         conforming rate indices.

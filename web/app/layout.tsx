@@ -15,7 +15,16 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        {/* Embed mode before first paint: only exactly ?embed=true. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "try{if(new URLSearchParams(location.search).get('embed')==='true')document.documentElement.setAttribute('data-embed','')}catch(e){}",
+          }}
+        />
+      </head>
       <body>{children}</body>
     </html>
   );

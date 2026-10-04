@@ -252,3 +252,16 @@ input.num { width: 7rem; min-height: 44px; padding: 0 0.6rem; font: inherit; fon
 .cards { gap: 0.4rem; }
 .ladder-table .trig { position: relative; }
 .ladder-table .trig .sr-only:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; clip: auto; width: auto; height: auto; margin: 0; padding: 0 0.2rem; background: #fff; z-index: 2; }
+
+/* Embed mode (?embed=true): the framing page has its own header. data-embed is set on <html> by an
+   inline script before first paint, so nothing jumps. The "As of" line stays (every number is dated). */
+html[data-embed] .accent-bar,
+html[data-embed] .masthead h1,
+html[data-embed] .masthead .subtitle { display: none; }
+html[data-embed] .wrap { padding-left: 0; padding-right: 0; }
+html[data-embed] .masthead { padding-top: 0.5rem; }
+
+/* Not-found page */
+.nf { max-width: 32rem; margin: 0 auto; padding: 4rem var(--gutter); }
+.nf h1 { margin: 0 0 0.75rem; font-size: 1.5rem; }
+.nf a { color: var(--accent-text); }
