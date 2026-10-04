@@ -231,7 +231,7 @@ input.num { width: 7rem; min-height: 44px; padding: 0 0.6rem; font: inherit; fon
 .chart-box { min-width: 0; }
 .chart-svg { display: block; touch-action: pan-y; border: 1px solid var(--line); border-radius: 4px; user-select: none; -webkit-user-select: none; }
 .chart-svg text.ax { font-family: var(--mono); font-size: 11px; fill: #6a6c5e; }
-.chart-svg text.trig-label { font-family: var(--mono); font-size: 11.5px; font-weight: 700; fill: #506e14; }
+.chart-svg text.trig-label { font-family: var(--mono); font-size: 11.5px; font-weight: 700; fill: #506e14; paint-order: stroke; stroke: #fff; stroke-width: 3px; stroke-linejoin: round; }
 .chart-readout { min-height: 2.6rem; display: flex; flex-wrap: wrap; align-items: center; gap: 0.2rem 0.9rem; padding: 0.2rem 0; font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 0.82rem; }
 .chart-tools { margin-top: 0.3rem; }
 .data-table { width: 100%; margin-top: 0.5rem; border-collapse: collapse; background: var(--surface); font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 0.85rem; }
@@ -243,3 +243,12 @@ input.num { width: 7rem; min-height: 44px; padding: 0 0.6rem; font: inherit; fon
 .footer { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--line-2); font-size: 0.85rem; color: var(--muted); }
 .footer p { margin: 0 0 0.4rem; }
 .footer a { color: var(--accent-text); }
+
+.card { padding: 0.5rem 0.7rem; }
+.card-top { margin-bottom: 0.25rem; flex-wrap: nowrap; align-items: center; }
+.card-rate { font-size: 1.2rem; }
+.card-figs { margin-top: 0.3rem; gap: 0.1rem 0.8rem; font-size: 0.85rem; }
+.card-figs.card-meds { margin-top: 0.1rem; color: var(--muted); }
+.cards { gap: 0.4rem; }
+.ladder-table .trig { position: relative; }
+.ladder-table .trig .sr-only:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; clip: auto; width: auto; height: auto; margin: 0; padding: 0 0.2rem; background: #fff; z-index: 2; }

@@ -31,6 +31,8 @@ export type Brief = {
   source: string;
   passed: boolean;
   summary: string;
+  cost_bp: number;
+  threshold: number;
   errors: string[];
   warnings: string[];
   brief: string;
@@ -119,14 +121,21 @@ export function fmtTick(ms: number, withYear: boolean): string {
   return withYear ? `${base} '${String(dt.getUTCFullYear()).slice(2)}` : base;
 }
 
-export function niceTicks(lo: number, hi: number, target = 5): number[] {
-  const span = Math.max(hi - lo, 0.01);
-  const raw = span / target;
-  const steps = [0.05, 0.1, 0.2, 0.25, 0.5, 1, 2];
-  const step = steps.find((s) => s >= raw) ?? 2;
-  const out: number[] = [];
-  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(Math.round(v * 1000) / 1000);
-  return out;
+export function niceTicks(lo: number, hi: number, minCount = 4): number[] {
+  const steps = [0.05, 0.1, 0.25, 0.5, 1, 2];
+  const make = (step: number) => {
+    const out: number[] = [];
+    for (let v = Math.ceil(lo / step - 1e-9) * step; v <= hi + 1e-9; v += step) out.push(Math.round(v * 1000) / 1000);
+    return out;
+  };
+  // The largest nice step that still gives at least minCount ticks inside the domain.
+  let best = make(steps[0]);
+  for (const step of steps) {
+    const t = make(step);
+    if (t.length < minCount) break;
+    best = t;
+  }
+  return best;
 }
 
 export type Pt = { t: number; iso: string; v: number };

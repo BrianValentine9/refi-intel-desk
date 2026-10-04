@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import RateChart from "./Chart";
-import { PollFailed, PollTimeout, pollJson, useWidth, type WaitInfo } from "./net";
+import { PollTimeout, pollJson, useWidth, type WaitInfo } from "./net";
 import {
   COST_DEFAULT, COST_MAX, COST_MIN, DASH, THR_DEFAULT, THR_MAX, THR_MIN,
   briefCounts, clamp, fmtBelow, fmtInt, fmtMed, fmtRate, isNum, parseBrief,
@@ -11,7 +11,7 @@ import {
 
 type Tile = { id: string; label: string; value: number | null; delta_7d: number | null };
 type Bootstrap = {
-  status: { ready: boolean; as_of: string | null; pool_size?: number | null };
+  status: { ready: boolean; as_of: string | null; pool_size?: number | null; pool_seed?: number | null };
   metrics: { as_of: string; tiles: Tile[] } | null;
   series: SeriesBody | null;
   ladder: Ladder | { status: string };
@@ -21,7 +21,7 @@ type Load =
   | { kind: "loading" }
   | { kind: "error" }
   | { kind: "not_ready" }
-  | { kind: "ready"; asOf: string; tiles: Tile[]; poolSize: number | null };
+  | { kind: "ready"; asOf: string; tiles: Tile[]; poolSize: number | null; poolSeed: number | null };
 
 type Applied = { costBp: number; threshold: number };
 const DEFAULT_APPLIED: Applied = { costBp: Math.round(COST_DEFAULT * 100), threshold: THR_DEFAULT };
@@ -65,15 +65,21 @@ export default function Page() {
   const [seriesNonce, setSeriesNonce] = useState(0);
 
   const wrapRef = useRef<HTMLElement>(null);
-  const wrapW = useWidth(wrapRef);
 
   // ---- bootstrap -----------------------------------------------------------
   const run = useCallback(() => {
     setLoad({ kind: "loading" });
     (async () => {
-      const res = await fetch("/api/bootstrap", { headers: { Accept: "application/json" } });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = (await res.json()) as Bootstrap;
+      const ac = new AbortController();
+      const timeout = setTimeout(() => ac.abort(), 15_000);
+      let body: Bootstrap;
+      try {
+        const res = await fetch("/api/bootstrap", { signal: ac.signal, headers: { Accept: "application/json" } });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        body = (await res.json()) as Bootstrap;
+      } finally {
+        clearTimeout(timeout);
+      }
       if (!body.status?.ready || !body.metrics) { setLoad({ kind: "not_ready" }); return; }
       boot.current = body;
       if (body.series) {
@@ -90,6 +96,7 @@ export default function Page() {
         asOf: body.metrics.as_of,
         tiles: body.metrics.tiles,
         poolSize: isNum(body.status.pool_size) ? body.status.pool_size : null,
+        poolSeed: isNum(body.status.pool_seed) ? body.status.pool_seed : null,
       });
     })().catch(() => setLoad({ kind: "error" }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -218,7 +225,7 @@ export default function Page() {
           <>
             <Assumptions
               poolSize={load.poolSize}
-              narrow={wrapW !== null && wrapW < 720}
+              poolSeed={load.poolSeed}
               applied={applied}
               onApply={setApplied}
             />
@@ -241,7 +248,15 @@ export default function Page() {
               brief={brief}
               phase={briefPhase}
               hasLadder={ladder !== null}
-              stale={brief !== null && ladder !== null && (brief.rung !== rung || brief.as_of !== ladder.as_of)}
+              stale={
+                brief !== null &&
+                (!ladderCurrent ||
+                  ladder === null ||
+                  brief.cost_bp !== applied.costBp ||
+                  brief.threshold !== applied.threshold ||
+                  brief.rung !== rung ||
+                  brief.as_of !== ladder.as_of)
+              }
               onRetry={() => setBriefNonce((n) => n + 1)}
             />
 
@@ -266,10 +281,13 @@ export default function Page() {
 // ---- assumptions ----------------------------------------------------------------
 
 function Assumptions({
-  poolSize, narrow, applied, onApply,
-}: { poolSize: number | null; narrow: boolean; applied: Applied; onApply: (a: Applied) => void }) {
-  const [open, setOpen] = useState<boolean | null>(null);
-  const isOpen = open ?? !narrow;
+  poolSize, poolSeed, applied, onApply,
+}: { poolSize: number | null; poolSeed: number | null; applied: Applied; onApply: (a: Applied) => void }) {
+  // Decided before first paint: open on wide screens, closed on phones. Guarded for the static export.
+  const [open, setOpen] = useState<boolean>(() =>
+    typeof window !== "undefined" && typeof window.matchMedia === "function" ? window.matchMedia("(min-width: 720px)").matches : false,
+  );
+  const isOpen = open;
   const [cost, setCost] = useState(applied.costBp / 100);
   const [thrText, setThrText] = useState(String(applied.threshold));
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -355,7 +373,13 @@ function Assumptions({
             step={1}
             value={thrText}
             aria-describedby="thr-help"
-            onChange={(e) => setThrText(e.target.value)}
+            onChange={(e) => {
+              setThrText(e.target.value);
+              const n = Number(e.target.value);
+              const it = (e.nativeEvent as InputEvent).inputType ?? "";
+              const typed = it === "insertText" || it.startsWith("delete") || it === "insertFromPaste";
+              if (!typed && e.target.value.trim() !== "" && Number.isFinite(n)) schedule(cost, clamp(Math.round(n), THR_MIN, THR_MAX));
+            }}
             onBlur={commitThr}
             onKeyDown={(e) => { if (e.key === "Enter") commitThr(); }}
           />
@@ -363,7 +387,7 @@ function Assumptions({
         </div>
         <div className="field pool">
           <p className="pool-line">
-            {poolSize !== null ? `Pool: ${fmtInt(poolSize)} simulated loans (synthetic), fixed seed` : "Pool: simulated loans (synthetic), fixed seed"}
+            {`Pool: ${poolSize !== null ? `${fmtInt(poolSize)} ` : ""}simulated loans (synthetic), ${poolSeed !== null ? `seed ${poolSeed}` : "fixed seed"}`}
           </p>
           <button type="button" className="link-btn" onClick={reset} disabled={atDefaults}>Reset to defaults</button>
         </div>
@@ -512,6 +536,9 @@ function RungTable({ rungs, rung, onRung, maxCum }: { rungs: Rung[]; rung: numbe
               onKeyDown={selectKey(pick)}
             >
               <td className="l trig">
+                <button type="button" className="sr-only" aria-pressed={sel} onClick={(e) => { e.stopPropagation(); pick(); }}>
+                  {`Select trigger ${fmtRate(r.trigger_rate)}`}
+                </button>
                 {fmtRate(r.trigger_rate)}
                 {sel && <span className="badge">Selected</span>}
               </td>
@@ -549,7 +576,7 @@ function RungCards({ rungs, rung, onRung, maxCum }: { rungs: Rung[]; rung: numbe
               <div className="card-top">
                 <span className="card-rate">{fmtRate(r.trigger_rate)}</span>
                 {sel && <span className="badge">Selected</span>}
-                <span className="card-dist">{below.text} {below.above ? "above" : "below"} VA index</span>
+                <span className="card-dist">{below.text} {below.above ? "above" : "below"}<span className="sr-only"> VA index</span></span>
               </div>
               <BarShape r={r} maxCum={maxCum} selected={false} />
               <div className="card-figs">
@@ -557,6 +584,8 @@ function RungCards({ rungs, rung, onRung, maxCum }: { rungs: Rung[]; rung: numbe
                 <span>+{fmtInt(r.newly_eligible)} new</span>
                 <span><i className="swatch" style={{ background: "#5f7c93" }} aria-hidden="true" />VA <strong>{fmtInt(r.eligible_va)}</strong></span>
                 <span><i className="swatch" style={{ background: "#c08a2f" }} aria-hidden="true" />FHA <strong>{fmtInt(r.eligible_fha)}</strong></span>
+              </div>
+              <div className="card-figs card-meds">
                 <span>VA recoup <strong>{fmtMed(r.median_statutory_recoupment)}</strong> mo</span>
                 <span>BE <strong>{fmtMed(r.median_break_even)}</strong> mo</span>
               </div>
@@ -593,7 +622,7 @@ function BriefSection({
   brief, phase, hasLadder, stale, onRetry,
 }: { brief: Brief | null; phase: Phase; hasLadder: boolean; stale: boolean; onRetry: () => void }) {
   const busy = phase.kind === "computing" || phase.kind === "busy";
-  const dim = brief !== null && (busy || stale);
+  const dim = brief !== null && (busy || stale || phase.kind !== "ready");
   return (
     <section className="section" aria-labelledby="h-brief">
       <h2 id="h-brief">Morning brief</h2>
@@ -605,6 +634,12 @@ function BriefSection({
       )}
       {phase.kind === "error" && (
         <p className="status-note warn" role="status">The brief could not be written just now. Retrying shortly…</p>
+      )}
+      {brief !== null && stale && phase.kind !== "timeout" && phase.kind !== "failed" && (
+        <p className="status-note" role="status">
+          <span className="spinner" aria-hidden="true" />
+          Updating the brief for your assumptions…
+        </p>
       )}
       {brief === null && (busy || !hasLadder) && (
         <div aria-busy="true" aria-label="Loading the morning brief">

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { useWidth } from "./net";
 import { dateMs, DASH, fmtTick, isNum, niceTicks, valueAt, type Pt, type SeriesBody } from "./lib";
 
@@ -26,6 +26,8 @@ export default function RateChart({ data, days, onDays, loading, error, onRetry,
   const width = useWidth(box);
   const [showData, setShowData] = useState(false);
   const [hover, setHover] = useState<number | null>(null); // index into the union of dates
+
+  useEffect(() => { setHover(null); }, [data]);
 
   const model = useMemo(() => {
     if (!data) return null;
@@ -63,7 +65,7 @@ export default function RateChart({ data, days, onDays, loading, error, onRetry,
     const t1 = times[times.length - 1];
     const x = (t: number) => m.l + ((t - t0) / (t1 - t0)) * pw;
     const y = (v: number) => m.t + (1 - (v - lo) / (hi - lo)) * ph;
-    const yTicks = niceTicks(lo, hi, narrow ? 4 : 5);
+    const yTicks = niceTicks(lo, hi, narrow ? 3 : 4);
     const nx = narrow ? 3 : 5;
     const xTicks = Array.from({ length: nx }, (_, i) => t0 + ((t1 - t0) * i) / (nx - 1));
     const withYear = days > 180;
@@ -109,7 +111,7 @@ export default function RateChart({ data, days, onDays, loading, error, onRetry,
 
     body = (
       <>
-        <div className="chart-readout">
+        <div className="chart-readout" aria-live="polite">
           {readout && hoverT !== null ? (
             <>
               <strong>{isoByT.get(hoverT)}</strong>
@@ -163,7 +165,7 @@ export default function RateChart({ data, days, onDays, loading, error, onRetry,
           {trigY !== null && isNum(trigger) && (
             <g>
               <line x1={m.l} x2={m.l + pw} y1={trigY} y2={trigY} stroke="#a9cd2f" strokeWidth={2} strokeDasharray="6 4" />
-              <text x={m.l + pw - 4} y={trigY < m.t + 16 ? trigY + 14 : trigY - 5} textAnchor="end" className="trig-label">
+              <text x={m.l + 6} y={trigY < m.t + 16 ? trigY + 14 : trigY - 5} textAnchor="start" className="trig-label">
                 {`trigger ${trigger.toFixed(3)}%`}
               </text>
             </g>
