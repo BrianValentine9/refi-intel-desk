@@ -1,4 +1,4 @@
-"""U5: frame-ancestors CSP on every response, JSON 404 under /api, staging probe, RSS field."""
+"""U5/U6: frame-ancestors CSP on every response, JSON 404 under /api, HEAD on health/status, RSS field."""
 from __future__ import annotations
 
 import pytest
@@ -13,7 +13,7 @@ DEFAULT_CSP = f"frame-ancestors {DEFAULT_FRAME_ANCESTORS}"
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
-    for k in ("FRAME_ANCESTORS", "RENDER_SERVICE_NAME", "HEADER_PROBE"):
+    for k in ("FRAME_ANCESTORS",):
         monkeypatch.delenv(k, raising=False)
 
 
@@ -62,7 +62,9 @@ def test_frame_ancestors_override(work_db, dist, monkeypatch):
         assert c.get("/api/status").json()["config_issues"] == []
 
 
-@pytest.mark.parametrize("bad", ["'self'; script-src *", "'self'\nSet-Cookie: x=1", "https://a.example, https://b.example"])
+@pytest.mark.parametrize("bad", ["'self'; script-src *", "'self'\nSet-Cookie: x=1", "https://a.example, https://b.example",
+                                 "https://café.example", "'self' https://€.example", "'self' script-src *",
+                                 "https://" + "a" * 2000 + ".example"])
 def test_injection_attempt_falls_back_to_default(work_db, dist, monkeypatch, bad):
     monkeypatch.setenv("FRAME_ANCESTORS", bad)
     with _client() as c:
@@ -82,29 +84,29 @@ def test_unknown_api_paths_are_json_404(work_db, dist, path):
         assert "FAKE 404 PAGE" in c.get("/missing-page").text  # non-API 404 unchanged
 
 
-def test_probe_off_by_default_and_on_live_name(work_db, dist, monkeypatch):
-    monkeypatch.setenv("RENDER_SERVICE_NAME", "trigger-ladder")
-    with _client() as c:
-        r = c.get("/api/_probe/headers")
-        assert r.status_code == 404 and r.json() == {"detail": "Not found"}
-
-
-@pytest.mark.parametrize("env", [("RENDER_SERVICE_NAME", "trigger-ladder-staging"), ("HEADER_PROBE", "1")])
-def test_probe_on_returns_only_listed_headers(work_db, dist, monkeypatch, env):
-    monkeypatch.setenv(*env)
-    with _client() as c:
-        r = c.get("/api/_probe/headers", headers={
-            "X-Forwarded-For": "1.2.3.4", "X-Forwarded-Proto": "https", "Cookie": "s=secret",
-            "Authorization": "Bearer x", "X-Other": "no"})
-        assert r.status_code == 200
-        body = r.json()
-        assert body["headers"] == {"x-forwarded-for": "1.2.3.4", "x-forwarded-proto": "https"}
-        assert "client_host" in body
-        _assert_headers(r)
-
-
 def test_status_has_rss_number_or_null(work_db, dist):
     with _client() as c:
         v = c.get("/api/status").json()["process"]["rss_mb"]
         assert v is None or (isinstance(v, (int, float)) and v > 0)
     assert rss_mb() is None or rss_mb() > 0
+
+
+def test_frame_ancestors_1000_chars_is_still_allowed(work_db, dist, monkeypatch):
+    ok = "https://" + "a" * 980 + ".example"
+    assert len(ok) <= 1000
+    monkeypatch.setenv("FRAME_ANCESTORS", ok)
+    with _client() as c:
+        _assert_headers(c.get("/"), f"frame-ancestors {ok}")
+
+
+@pytest.mark.parametrize("path", ["/api/health", "/_stcore/health", "/api/status"])
+def test_head_matches_get_headers_without_body(work_db, dist, path):
+    with _client() as c:
+        g = c.get(path)
+        h = c.head(path)
+        assert h.status_code == 200 == g.status_code
+        assert h.content == b""
+        _assert_headers(h)
+        assert h.headers["content-type"] == g.headers["content-type"]
+        if path != "/api/status":  # the status body carries uptime, so only the stable ones match in length
+            assert h.headers["content-length"] == g.headers["content-length"]

@@ -19,7 +19,7 @@ from typing import Any, Callable
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from evals.verify import verify_brief
@@ -51,18 +51,18 @@ DEFAULT_DAYS = 90
 DEFAULT_WEB_DIST = Path(__file__).resolve().parents[2] / "web" / "out"
 IMMUTABLE_CACHE = "public, max-age=31536000, immutable"
 DEFAULT_FRAME_ANCESTORS = "'self' https://brianvalentine.co https://www.brianvalentine.co"
-# Request headers the TEMPORARY staging probe may echo. Nothing else (no cookies, no auth).
-PROBE_HEADERS = ("x-forwarded-for", "x-real-ip", "true-client-ip", "cf-connecting-ip", "forwarded",
-                 "x-forwarded-proto", "x-forwarded-host")
+FRAME_ANCESTORS_MAX_LEN = 1000
 
 
 def resolve_frame_ancestors(raw: str | None) -> tuple[str, list[str]]:
     """The frame-ancestors value and any config issue names. A value that could inject another
-    directive or header (``;``, a control character, a comma) falls back to the default."""
+    directive or header (``;``, a control character, a comma), is not plain ASCII, or is longer than
+    1000 characters falls back to the default."""
     if raw is None or not raw.strip():
         return DEFAULT_FRAME_ANCESTORS, []
     value = raw.strip()
-    if any(ch in value for ch in ";,") or any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+    if (len(value) > FRAME_ANCESTORS_MAX_LEN or not value.isascii()
+            or any(ch in value for ch in ";,") or any(ord(ch) < 32 or ord(ch) == 127 for ch in value)):
         return DEFAULT_FRAME_ANCESTORS, ["frame_ancestors_invalid"]
     return value, []
 
@@ -308,7 +308,6 @@ def create_app(
 
     frame_ancestors, config_issues = resolve_frame_ancestors(os.environ.get("FRAME_ANCESTORS"))
     csp_value = f"frame-ancestors {frame_ancestors}"
-    probe_on = os.environ.get("RENDER_SERVICE_NAME", "").endswith("-staging") or os.environ.get("HEADER_PROBE") == "1"
 
     @app.middleware("http")
     async def _security_headers(request: Request, call_next):
@@ -413,17 +412,23 @@ def create_app(
         return bp, thr
 
     # ---- routes ------------------------------------------------------------
-    @app.get("/api/health")
-    def health():
-        return {"status": "ok"}
+    def head_of(request: Request, response):
+        """HEAD answers 200 with the GET headers (content-length included) and no body."""
+        if request.method != "HEAD":
+            return response
+        return Response(status_code=response.status_code, headers=dict(response.headers))
 
-    @app.get("/_stcore/health")
-    def stcore_health():
-        return PlainTextResponse("ok")
+    @app.api_route("/api/health", methods=["GET", "HEAD"])
+    def health(request: Request):
+        return head_of(request, JSONResponse({"status": "ok"}))
 
-    @app.get("/api/status")
-    def status():
-        return _json(status_body(state.version))
+    @app.api_route("/_stcore/health", methods=["GET", "HEAD"])
+    def stcore_health(request: Request):
+        return head_of(request, PlainTextResponse("ok"))
+
+    @app.api_route("/api/status", methods=["GET", "HEAD"])
+    def status(request: Request):
+        return head_of(request, _json(status_body(state.version)))
 
     @app.get("/api/metrics")
     def metrics():
@@ -533,15 +538,6 @@ def create_app(
             "trigger_rate": rungs[idx].trigger_rate,
             "as_of": v.as_of,
         })
-
-    if probe_on:
-        # TEMPORARY (U5/U6 staging measurement): shows which client-IP headers Render forwards.
-        # Off unless RENDER_SERVICE_NAME ends with "-staging" or HEADER_PROBE=1 (the live service is
-        # named "trigger-ladder", so it is off there). Remove or disable before cutover (U7).
-        @app.get("/api/_probe/headers")
-        def probe_headers(request: Request):
-            seen = {h: request.headers[h] for h in PROBE_HEADERS if h in request.headers}
-            return _json({"client_host": request.client.host if request.client else None, "headers": seen})
 
     @app.api_route("/api", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
     @app.api_route("/api/{rest:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
