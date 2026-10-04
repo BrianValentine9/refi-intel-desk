@@ -1,1 +1,1 @@
-"""Streamlit dashboard UI (Step 4)."""
+"""App support: data access and boot helpers for the API."""

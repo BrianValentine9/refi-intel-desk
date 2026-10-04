@@ -1,7 +1,11 @@
-# Render Blueprint for the always-on Trigger Ladder desk (Starter, about $7/month, verified 2026-10-03).
-# Render > New > Blueprint > pick this repo. Render asks for the two secret values below at setup;
-# they are never stored in this file. The working DB is copied from data/seed.db on first boot
-# and refreshed from FRED when stale, so no disk is needed.
+# Render Blueprint for the Trigger Ladder desk (Starter plan, about $7/month, verified 2026-10-03).
+# The service runs the FastAPI app (src/api/app.py) that serves the static web front end (web/out).
+# build: scripts/build.sh (pip install, then npm ci + npm run build). start: scripts/start.sh (uvicorn, one worker).
+# This file only takes effect when merged to main: the live service is Blueprint-managed on branch main.
+# Secrets (ANTHROPIC_API_KEY, FRED_API_KEY) are set in the Render dashboard, never stored in this file.
+# The working DB is copied from data/seed.db on first boot and refreshed from FRED when stale, so no disk is needed.
+# healthCheckPath stays on the Streamlit-compatible /_stcore/health for the first day after cutover (the new app
+# answers it); move it to /api/health after the soak.
 services:
   - type: web
     name: trigger-ladder
@@ -9,12 +13,20 @@ services:
     plan: starter
     branch: main
     autoDeploy: true
-    buildCommand: pip install -r requirements.txt
-    startCommand: streamlit run streamlit_app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true
+    buildCommand: bash scripts/build.sh
+    startCommand: bash scripts/start.sh
     healthCheckPath: /_stcore/health
     envVars:
       - key: PYTHON_VERSION
         value: 3.14.6
+      - key: NODE_VERSION
+        value: 24.14.1
+      - key: BRIEF_AI_SCOPE
+        value: default_assumptions
+      - key: BRIEF_DAILY_CAP
+        value: "20"
+      - key: BRIEF_IP_HEADER
+        value: cf-connecting-ip
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: FRED_API_KEY

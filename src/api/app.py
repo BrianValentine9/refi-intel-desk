@@ -3,8 +3,7 @@
 Importing this module has no side effects. The lifespan prepares the working DB, loads the
 loan pool once and builds the ladder service; the default ladder and the refresh scheduler
 start in the background. Handlers never compute a ladder inline: they ask the service, and
-they always pass the app's current as-of, never a client value. Never imports Streamlit or
-``src.app.dashboard``.
+they always pass the app's current as-of, never a client value. Never imports Streamlit.
 """
 
 from __future__ import annotations

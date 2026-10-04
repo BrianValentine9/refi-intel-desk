@@ -40,11 +40,6 @@ def test_ensure_database_empty_without_seed_or_key(tmp_path, monkeypatch):
     assert as_of is None
 
 
-def test_apply_streamlit_secrets_noop_without_secrets(monkeypatch):
-    monkeypatch.delenv("FRED_API_KEY", raising=False)
-    bootstrap.apply_streamlit_secrets()  # must not raise
-
-
 def test_is_stale_thresholds():
     assert bootstrap._is_stale("2020-01-01") is True
     assert bootstrap._is_stale(date.today().isoformat()) is False

@@ -1,7 +1,0 @@
-# Trigger Ladder - light theme, pinned to match brianvalentine.co.
-[theme]
-base = "light"
-primaryColor = "#a9cd2f"
-backgroundColor = "#ffffff"
-secondaryBackgroundColor = "#f4f2ea"
-textColor = "#15160f"

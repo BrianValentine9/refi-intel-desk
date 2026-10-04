@@ -1,7 +1,7 @@
-"""Cloud/local boot helpers - secrets bridge, first-run database ensure, and a
+"""Cloud/local boot helpers - secrets report, first-run database ensure, and a
 staleness refresh.
 
-Streamlit Community Cloud does not ship a populated SQLite file (local DBs are
+A cloud host does not ship a populated SQLite file (local DBs are
 gitignored). This module copies the committed seed when present, then keeps the
 data current: once a ready database exists, if its latest observation is more than
 a few days old and a FRED key is available, it runs a small incremental ingest.
@@ -28,7 +28,7 @@ SECRET_KEYS = ("FRED_API_KEY", "ANTHROPIC_API_KEY")
 # Refresh policy. Rates are business-daily, so a gap of up to 3 calendar days
 # (a Friday observation still being latest on Monday) is normal, not stale.
 STALE_AFTER_DAYS = 3
-# At most one refresh attempt per container per few hours, so Streamlit reruns do
+# At most one refresh attempt per container per few hours, so repeated checks do
 # not stampede FRED. Module-level state resets on container restart, which is fine.
 REFRESH_MIN_INTERVAL_SEC = 3 * 60 * 60
 _last_refresh_attempt: float | None = None
@@ -36,24 +36,10 @@ _last_refresh_attempt: float | None = None
 _refresh_lock = threading.Lock()
 
 
-def apply_streamlit_secrets() -> None:
-    """Copy Streamlit secrets into ``os.environ`` when env vars are unset."""
-    try:
-        import streamlit as st
-
-        for key in SECRET_KEYS:
-            if key in st.secrets and not os.environ.get(key):
-                os.environ[key] = str(st.secrets[key]).strip()
-    except Exception:
-        # Local CLI / missing secrets.toml - dotenv already covers that path.
-        return
-
-
 def secrets_from_env() -> dict[str, bool]:
     """Report which secret keys are present in ``os.environ`` (never the values).
 
-    Env-only and Streamlit-free, for the API process; the dashboard keeps
-    ``apply_streamlit_secrets``.
+    Env-only, for the API process.
     """
     return {key: bool(os.environ.get(key)) for key in SECRET_KEYS}
 
@@ -111,7 +97,7 @@ def claim_refresh(as_of: str | None) -> bool:
     """Gate for any refresh: stale as-of, FRED key present, not throttled.
 
     True means the caller may pull now (the throttle marker is already set, so a
-    concurrent caller gets False). Used by the Streamlit path and the API's
+    concurrent caller gets False). Used by the API's
     versioned-DB refresh.
     """
     global _last_refresh_attempt

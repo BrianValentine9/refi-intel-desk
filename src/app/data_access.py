@@ -1,7 +1,7 @@
-"""Read-only data access for the dashboard.
+"""Read-only data access for the API.
 
 All SQL the UI needs lives here (centralized and tested), so no raw query strings
-are scattered through the Streamlit layer. These helpers only read; the app never
+are scattered through the API layer. These helpers only read; the app never
 writes to the database.
 """
 
@@ -13,7 +13,7 @@ from pathlib import Path
 
 from src.data import db
 
-# Series the dashboard surfaces (Treasury + VA/FHA/conforming indices).
+# Series the API surfaces (Treasury + VA/FHA/conforming indices).
 TREASURY = "DGS10"
 VA_INDEX = "OBMMIVA30YF"
 FHA_INDEX = "OBMMIFHA30YF"

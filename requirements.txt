@@ -1,14 +1,11 @@
 # Pinned to versions resolved on Python 3.14 (2026-06).
 # Re-pin with `pip freeze` if you bump the Python or a dependency.
-streamlit==1.58.0
-plotly==6.8.0
-pandas==3.0.3
 requests==2.34.2
 python-dotenv==1.2.2
 anthropic==0.84.0
 pytest==9.0.3
 
-# Added for the API (U1b); streamlit stays until cutover.
+# API (FastAPI + uvicorn).
 fastapi==0.142.2
 httpx==0.28.1
 uvicorn==0.54.0

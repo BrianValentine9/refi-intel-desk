@@ -1,4 +1,4 @@
-"""Tests for the dashboard's read-only data-access helpers."""
+"""Tests for the read-only data-access helpers."""
 
 from __future__ import annotations
 
@@ -53,6 +53,14 @@ def test_get_range_narrow_window(conn):
 
 def test_database_ready_false_when_series_missing(conn):
     assert data_access.database_ready(conn) is False  # only DGS10 present
+
+
+def test_database_ready_false_on_empty_db(tmp_path):
+    empty = db.connect(tmp_path / "empty.db")  # schema only, no observations
+    try:
+        assert data_access.database_ready(empty) is False  # drives the not-ready response
+    finally:
+        empty.close()
 
 
 def test_database_ready_true_when_all_present(conn):
