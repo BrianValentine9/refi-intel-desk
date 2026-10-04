@@ -10,6 +10,10 @@ data/*.db
 data/*.sqlite*
 !data/seed.db
 data/cache/
+data/*.db-wal
+data/*.db-shm
+data/*.db-journal
+data/*.db.tmp
 
 # --- Python ---
 __pycache__/
@@ -17,6 +21,7 @@ __pycache__/
 *.pyo
 *.pyd
 .venv/
+.venv-api/
 venv/
 env/
 *.egg-info/

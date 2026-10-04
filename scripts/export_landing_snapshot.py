@@ -54,7 +54,7 @@ def _as_of(conn):
 
 def build_snapshot(db_path: Path = SEED_DB) -> dict:
     """Run the ladder core against ``db_path`` and return the landing snapshot dict."""
-    conn = db.connect(db_path)
+    conn = db.connect(db_path, readonly=True)
     try:
         loans = pool.load_pool(conn)
         if not loans:

@@ -30,14 +30,54 @@ CREATE TABLE IF NOT EXISTS ingest_log (
 """
 
 
-def connect(db_path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
-    """Open (creating if needed) the database and ensure the schema exists."""
+# The committed seed is read-only by contract: no pragma, no WAL, no write ever.
+_SEED_PATH = (Path(__file__).resolve().parents[2] / "data" / "seed.db").resolve()
+BUSY_TIMEOUT_MS = 5000
+
+
+def connect(
+    db_path: str | Path = DEFAULT_DB_PATH,
+    *,
+    readonly: bool = False,
+    ensure_schema: bool = True,
+    timeout: float | None = None,
+) -> sqlite3.Connection:
+    """Open the database; by default create it if needed and ensure the schema exists.
+
+    ``readonly=True`` opens a ``mode=ro`` URI: no directory creation, no pragma, no
+    schema statement, and writes raise ``sqlite3.OperationalError``. Use it for the
+    committed seed. ``ensure_schema=False`` skips the CREATE script (for a DB that
+    ``init_working_db`` already prepared). ``timeout`` is the sqlite busy wait in seconds.
+    """
     path = Path(db_path)
+    kwargs = {} if timeout is None else {"timeout": timeout}
+    if readonly:
+        return sqlite3.connect(f"file:{path.resolve().as_posix()}?mode=ro", uri=True, **kwargs)
     if path.parent and not path.parent.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
-    conn.executescript(_SCHEMA)
+    conn = sqlite3.connect(path, **kwargs)
+    if ensure_schema:
+        conn.executescript(_SCHEMA)
     return conn
+
+
+def init_working_db(db_path: str | Path) -> None:
+    """Create the schema once and switch the working DB to WAL journaling.
+
+    For the working DB only: raises ValueError if the path is the committed seed
+    (``data/seed.db``), which must stay in rollback-journal mode and byte-identical.
+    """
+    path = Path(db_path)
+    resolved = path.resolve()
+    if resolved == _SEED_PATH or resolved == (Path("data") / "seed.db").resolve():
+        raise ValueError("init_working_db must never be called on the committed seed")
+    conn = connect(path, timeout=BUSY_TIMEOUT_MS / 1000)
+    try:
+        conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def upsert_observations(conn: sqlite3.Connection, observations: Iterable[Observation]) -> int:

@@ -21,7 +21,7 @@ def test_export_matches_core():
     _require_seed()
     snap = ex.build_snapshot(SEED)
 
-    conn = db.connect(SEED)
+    conn = db.connect(SEED, readonly=True)
     try:
         loans = pool.load_pool(conn)
         if not loans:

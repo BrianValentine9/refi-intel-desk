@@ -4,7 +4,7 @@
 # FLOOR is raised only to a real new passing count, with the reason in BUILD_LEDGER.md.
 # Python: VENV_PY if set, else the worktree's .venv-api (from U1b), else the shared venv (read-only use).
 set -uo pipefail
-FLOOR=156
+FLOOR=164
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 if [ -n "${VENV_PY:-}" ]; then PY="$VENV_PY"

@@ -13,12 +13,13 @@ from __future__ import annotations
 
 import os
 import shutil
+import threading
 import time
 from datetime import date
 from pathlib import Path
 
 from src.app import data_access as da
-from src.data import ingest
+from src.data import db, ingest
 from src.data.series_registry import all_series_ids
 
 SEED_DB_PATH = Path("data") / "seed.db"
@@ -31,6 +32,8 @@ STALE_AFTER_DAYS = 3
 # not stampede FRED. Module-level state resets on container restart, which is fine.
 REFRESH_MIN_INTERVAL_SEC = 3 * 60 * 60
 _last_refresh_attempt: float | None = None
+# Guards the throttle check-and-set so concurrent sessions/threads start one refresh.
+_refresh_lock = threading.Lock()
 
 
 def apply_streamlit_secrets() -> None:
@@ -46,6 +49,15 @@ def apply_streamlit_secrets() -> None:
         return
 
 
+def secrets_from_env() -> dict[str, bool]:
+    """Report which secret keys are present in ``os.environ`` (never the values).
+
+    Env-only and Streamlit-free, for the API process; the dashboard keeps
+    ``apply_streamlit_secrets``.
+    """
+    return {key: bool(os.environ.get(key)) for key in SECRET_KEYS}
+
+
 def _copy_seed_if_needed(path: Path) -> bool:
     """Copy committed seed.db into the working DB path. Returns True if copied."""
     if not SEED_DB_PATH.is_file():
@@ -53,7 +65,16 @@ def _copy_seed_if_needed(path: Path) -> bool:
     if path.resolve() == SEED_DB_PATH.resolve():
         return False
     path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(SEED_DB_PATH, path)
+    # Atomic and WAL-safe: stage next to the target, drop stale sidecars so they cannot
+    # be replayed onto the fresh file, swap in, then switch the copy to WAL.
+    tmp = path.with_name(path.name + ".tmp")
+    shutil.copy2(SEED_DB_PATH, tmp)
+    for suffix in ("-wal", "-shm", "-journal"):
+        sidecar = path.with_name(path.name + suffix)
+        if sidecar.exists():
+            sidecar.unlink()
+    os.replace(tmp, path)
+    db.init_working_db(path)
     return True
 
 
@@ -86,9 +107,10 @@ def _maybe_refresh_stale(path: Path, as_of: str | None) -> None:
         return
     if not os.environ.get("FRED_API_KEY"):
         return
-    if _refresh_throttled():
-        return
-    _last_refresh_attempt = time.monotonic()
+    with _refresh_lock:
+        if _refresh_throttled():
+            return
+        _last_refresh_attempt = time.monotonic()
     try:
         # Incremental: each series resumes from its latest stored date, so the pull is small.
         ingest.run(all_series_ids(), db_path=path)
