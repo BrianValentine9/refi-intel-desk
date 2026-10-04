@@ -5,7 +5,7 @@ import RateChart from "./Chart";
 import { PollTimeout, pollJson, useWidth, type WaitInfo } from "./net";
 import {
   COST_DEFAULT, COST_MAX, COST_MIN, DASH, THR_DEFAULT, THR_MAX, THR_MIN,
-  briefCounts, clamp, fmtBelow, fmtInt, fmtMed, fmtRate, isNum, parseBrief,
+  aiReasonNote, briefCounts, clamp, fmtBelow, fmtInt, fmtMed, fmtRate, isNum, parseBrief,
   type Brief, type Ladder, type Rung, type SeriesBody,
 } from "./lib";
 
@@ -660,6 +660,7 @@ function BriefSection({
 function BriefBody({ b }: { b: Brief }) {
   const paras = parseBrief(b.brief);
   const counts = briefCounts(b.summary);
+  const aiNote = aiReasonNote(b.ai?.reason);
   const source = b.source === "llm" ? "AI" : "Template";
   return (
     <>
@@ -667,6 +668,7 @@ function BriefBody({ b }: { b: Brief }) {
         Source: {source} · {b.passed ? "Eval PASS" : "Eval FAIL"}
         {counts ? ` · checked ${counts.pct} rates, ${counts.counts} counts, ${counts.points} points` : ""}
       </p>
+      {aiNote && <p className="brief-status">{aiNote}</p>}
       {b.errors.length > 0 && (
         <ul className="msg-list err" aria-label="Brief check errors">
           {b.errors.map((e, i) => <li key={i}>{e}</li>)}

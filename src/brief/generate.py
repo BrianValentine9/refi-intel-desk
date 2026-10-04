@@ -56,8 +56,8 @@ def render_template_brief(snapshot: BriefSnapshot) -> str:
         if m.median_statutory_recoupment is not None
         else f"Against a synthetic pool of {snapshot.pool_size:,} loans, "
         f"{m.cumulative_count:,} clear at market trigger {m.trigger_rate:.3f}%.",
-        f"At the selected trigger {s.trigger_rate:.3f}% ({s.distance_from_market:.3f}% "
-        f"below market), {s.cumulative_count:,} modeled loans clear "
+        f"At the selected trigger {s.trigger_rate:.3f}% ({s.distance_from_market:.3f} points "
+        f"below the VA index), {s.cumulative_count:,} modeled loans clear "
         f"({s.eligible_va:,} VA, {s.eligible_fha:,} FHA). "
         f"Call-clear flags remain alongside: {s.soft_blocker_count:,} soft-blocker and "
         f"{s.unknown_count:,} unknown flags among eligible files.",

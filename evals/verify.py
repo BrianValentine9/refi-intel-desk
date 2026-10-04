@@ -10,7 +10,7 @@ from src.brief.snapshot import BriefSnapshot, as_of_mentioned
 _PCT = re.compile(r"(?<!\d)(-?\d+\.\d{1,3})%")
 _INT = re.compile(r"\b(\d{1,3}(?:,\d{3})*|\d+)\b")
 # A decimal written as a points value: "0.280 points", "-0.28 point", "0.031 percentage points", "0.031 pts".
-_POINTS = re.compile(r"(?<![\d.])[+-]?(\d+\.\d+)\s*(?:percentage\s+points?|points?|pts)\b", re.IGNORECASE)
+_POINTS = re.compile(r"(?<![\d.])[+-]?(\d+\.\d+)[\s-]*(?:percentage[\s-]+points?|points?|pts)\b", re.IGNORECASE)
 _MONTHS = re.compile(r"(\d+\.\d)\s+months", re.IGNORECASE)
 
 

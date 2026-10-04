@@ -36,6 +36,7 @@ export type Brief = {
   errors: string[];
   warnings: string[];
   brief: string;
+  ai?: { scope: string; reason: string | null };
   rung: number;
   trigger_rate: number;
   as_of: string;
@@ -94,11 +95,28 @@ export function parseBrief(text: string): Piece[][] {
     .filter(Boolean);
   return paras.map((p) => {
     const flat = p.replace(/\n/g, " ");
-    return flat
-      .split("**")
+    const parts = flat.split("**");
+    // An even part count means an odd number of markers: the last "**" never closes, so it stays literal text.
+    if (parts.length % 2 === 0) {
+      const tail = parts.splice(parts.length - 2, 2);
+      parts.push(tail.join("**"));
+    }
+    return parts
       .map((chunk, i) => ({ text: chunk, bold: i % 2 === 1 }))
       .filter((c) => c.text.length > 0);
   });
+}
+
+/** One quiet line for why a template brief is showing; null when no line is wanted (no_key, off, or AI used). */
+export function aiReasonNote(reason: string | null | undefined): string | null {
+  switch (reason) {
+    case "daily_cap": return "AI brief paused for today; showing the template brief.";
+    case "busy": return "AI brief busy; showing the template brief.";
+    case "cooldown":
+    case "ip_limit": return "AI brief unavailable right now; showing the template brief.";
+    case "scope": return "The AI brief covers the default assumptions; showing the template brief for yours.";
+    default: return null;
+  }
 }
 
 export function briefCounts(summary: string): { pct: string; counts: string; points: string } | null {

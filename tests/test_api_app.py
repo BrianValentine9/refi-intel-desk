@@ -295,11 +295,78 @@ def test_brief_template_rung_and_deterministic(client_for):
     ladder = c.get("/api/ladder").json()
     assert b["trigger_rate"] == ladder["rungs"][3]["trigger_rate"]
     assert set(b) == {"source", "passed", "summary", "errors", "warnings", "brief", "rung", "trigger_rate", "as_of",
-                    "cost_bp", "threshold"}
+                    "cost_bp", "threshold", "ai"}
     assert b["cost_bp"] == 100 and b["threshold"] == 48
     assert c.get("/api/brief?rung=3").json() == b
     assert len(fake.calls) == n_calls  # a repeat does not recompute
     assert c.get("/api/brief").json()["rung"] == 0
+
+
+def test_brief_ai_shape_default_is_no_key(client_for):
+    c, _fake, _s = client_for()
+    wait_ready(c)
+    b = c.get("/api/brief").json()
+    assert b["ai"] == {"scope": "default_assumptions", "reason": "no_key"}
+    assert wait_ready(c, "/api/brief?cost_bp=50").json()["ai"]["reason"] == "scope"  # scope is checked before the key
+
+
+def test_brief_ai_reasons_and_status_with_fake_guard(client_for, monkeypatch):
+    from src.api.brief_guard import BriefGuard, BriefSettings
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-test-value-do-not-leak")
+    calls = []
+
+    def fake_gen(snapshot, *, mode):
+        calls.append(mode)
+        return "Model text, synthetic pool. Not advice.", "llm"
+
+    guard = BriefGuard(BriefSettings(scope="default_assumptions", daily_cap=1), generate=fake_gen)
+    c, _fake, _s = client_for(brief_guard=guard)
+    wait_ready(c)
+    first = c.get("/api/brief").json()
+    assert first["source"] == "llm" and first["ai"] == {"scope": "default_assumptions", "reason": None}
+    assert first["brief"].startswith("Model text") and "passed" in first
+    assert c.get("/api/brief").json()["source"] == "llm" and len(calls) == 1  # cache hit
+    assert c.get("/api/brief?rung=3").json()["ai"]["reason"] == "daily_cap"  # new key, cap spent
+    assert wait_ready(c, "/api/brief?cost_bp=150").json()["ai"]["reason"] == "scope"
+    st = c.get("/api/status").json()["brief_ai"]
+    assert st == {"scope": "default_assumptions", "available": True, "used_today": 1, "cap": 1, "cooling_down": False}
+    assert "fake-test-value" not in c.get("/api/status").text + c.get("/api/brief").text
+
+
+def test_brief_failure_reports_cooldown_without_error_text(client_for, monkeypatch):
+    from src.api.brief_guard import BriefGuard, BriefSettings
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-test-value")
+
+    def boom(snapshot, *, mode):
+        raise RuntimeError("sk-ant-leaky-detail")
+
+    c, _fake, _s = client_for(brief_guard=BriefGuard(BriefSettings(scope="all"), generate=boom))
+    wait_ready(c)
+    r = c.get("/api/brief")
+    assert r.status_code == 200 and r.json()["source"] == "template" and r.json()["ai"]["reason"] == "cooldown"
+    assert "leaky" not in r.text
+    assert c.get("/api/status").json()["brief_ai"]["cooling_down"] is True
+
+
+def test_brief_ip_header_is_passed_only_when_configured(client_for, monkeypatch):
+    from src.api.brief_guard import BriefGuard, BriefSettings
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-test-value")
+    seen = []
+    g = BriefGuard(BriefSettings(scope="all", ip_header="X-Forwarded-For"), generate=lambda s, *, mode: ("ok text", "llm"))
+    orig = g.request
+
+    def spy(snapshot, **kw):
+        seen.append(kw["ip_header_value"])
+        return orig(snapshot, **kw)
+
+    g.request = spy
+    c, _fake, _s = client_for(brief_guard=g)
+    wait_ready(c)
+    c.get("/api/brief", headers={"X-Forwarded-For": "1.1.1.1, 2.2.2.2"})
+    assert seen == ["1.1.1.1, 2.2.2.2"]
 
 
 # ---- real engine end to end ------------------------------------------------

@@ -24,6 +24,7 @@ from fastapi.staticfiles import StaticFiles
 
 from evals.verify import verify_brief
 from src.api import inputs
+from src.api.brief_guard import BriefGuard
 from src.api.compute import (
     DEFAULT_COST_BP,
     DEFAULT_THRESHOLD,
@@ -33,7 +34,6 @@ from src.api.compute import (
 from src.api.refresh import RefreshScheduler, discard_db_file, discard_old_generations, make_candidate, next_generation_path
 from src.app import bootstrap
 from src.app import data_access as da
-from src.brief.generate import generate_brief
 from src.brief.snapshot import build_snapshot
 from src.core import pool
 from src.data import db
@@ -214,8 +214,10 @@ def create_app(
     refresh_run: Callable[[], object] | None = None,
     refresh_interval: float | None = None,
     refresh_first_delay: float | None = None,
+    brief_guard: BriefGuard | None = None,
 ) -> FastAPI:
     state = AppState()
+    guard = brief_guard or BriefGuard()  # settings read from the environment once, here
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -276,6 +278,7 @@ def create_app(
             "pool_size": (len(state.loans) or pool.DEFAULT_POOL_SIZE) if v else None,
             "pool_seed": pool.DEFAULT_SEED if v else None,
             "ladder_warm": warm,
+            "brief_ai": guard.status(),
             "refresh": {
                 "last_run_at": sched.last_run_at if sched else None,
                 "last_result": sched.last_result if sched else None,
@@ -413,7 +416,7 @@ def create_app(
                       "ladder": ladder_part})
 
     @app.get("/api/brief")
-    def brief(cost_bp: str | None = None, threshold: str | None = None, rung: str | None = None):
+    def brief(request: Request, cost_bp: str | None = None, threshold: str | None = None, rung: str | None = None):
         bp, thr = parse_ladder_inputs(cost_bp, threshold)
         idx = inputs.parse_rung(0 if rung is None else rung)
         cur = current()
@@ -440,10 +443,17 @@ def create_app(
             return not_ready_response()
         finally:
             conn.close()
-        text, source = generate_brief(snapshot, mode="template")  # template only until the AI path lands
+        ip_header = guard.settings.ip_header
+        text, source, reason = guard.request(
+            snapshot,
+            cost_bp=bp,
+            threshold=thr,
+            ip_header_value=request.headers.get(ip_header) if ip_header else None,
+        )
         result = verify_brief(text, snapshot)
         return _json({
             "source": source,
+            "ai": {"scope": guard.settings.scope, "reason": reason},
             "passed": result.passed,
             "summary": result.summary(),
             "errors": result.errors,

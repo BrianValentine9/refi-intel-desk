@@ -179,3 +179,32 @@ def test_basis_points_stay_with_the_count_scan(snap_and_rungs):
     _conn, snap, _rungs = snap_and_rungs
     assert verify_brief(_brief_with(snap, "VA moved 31 basis points"), snap).passed
     assert not verify_brief(_brief_with(snap, "VA moved 280 basis points"), snap).passed
+
+
+def test_hyphenated_points_unit_is_checked(snap_and_rungs):
+    _conn, snap, _rungs = snap_and_rungs
+    snap = _points_snap(snap)
+    for ok in ("VA fell by a 0.280-point margin", "a 0.280 -point drop", "0.031-percentage-point rise"):
+        r = verify_brief(_brief_with(snap, ok), snap)
+        assert r.passed and r.points_checked == 1, (ok, r.errors)
+    bad = verify_brief(_brief_with(snap, "a 0.777-point move"), snap)
+    assert not bad.passed and bad.errors == ["unsupported points value 0.777"]
+
+
+CORNERS = [(50, 12), (50, 120), (150, 12), (150, 120), (100, 48)]
+
+
+@pytest.mark.parametrize("bp,thr", CORNERS)
+def test_template_wording_and_passes_all_rungs_at_input_corners(snap_and_rungs, bp, thr):
+    conn, _snap, _rungs = snap_and_rungs
+    loans = pool.load_pool(conn) or pool.generate_pool(pool.DEFAULT_SEED)
+    rungs, _va, _fha = ladder.build_ladder(loans, conn, cost_pct=bp / 10000, threshold_months=thr)
+    assert len(rungs) == 17
+    for i in range(17):
+        snap = build_snapshot(conn, cost_pct=bp / 10000, threshold_months=thr, rungs=rungs, selected_index=i)
+        text = generate.render_template_brief(snap)
+        d = rungs[i].distance_from_market
+        assert f"({d:.3f} points below the VA index)" in text and "below market" not in text
+        r = verify_brief(text, snap)
+        assert r.passed, (bp, thr, i, r.errors)
+
