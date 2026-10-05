@@ -307,7 +307,9 @@ def test_brief_template_rung_and_deterministic(client_for):
 
 
 def test_brief_ai_shape_default_is_no_key(client_for):
-    c, _fake, _s = client_for()
+    from src.api.brief_guard import BriefGuard, BriefSettings
+
+    c, _fake, _s = client_for(brief_guard=BriefGuard(BriefSettings(scope="default_assumptions"), key_present=lambda: False))
     wait_ready(c)
     b = c.get("/api/brief").json()
     assert b["ai"] == {"scope": "default_assumptions", "reason": "no_key"}

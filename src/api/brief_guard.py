@@ -4,6 +4,10 @@ Every paid Anthropic call goes through ``BriefGuard.request``. Decision order (f
 scope -> no key -> cache hit (free) -> [under one lock: same key already in flight = wait and share;
 other key in flight = busy; cool-down; daily cap reserved; per-IP limit] -> the paid call.
 Template briefs are cheap and deterministic, so they are never cached here.
+
+Paid AI is OFF unless BRIEF_AI_SCOPE is set: unset or empty means "off" (not an error). A recognised value
+("default_assumptions", "all", "off") is used as given; an unrecognised value also fails closed to "off" and
+is reported in ``issues``. The live service turns AI on explicitly in render.yaml.
 """
 
 from __future__ import annotations
@@ -24,7 +28,7 @@ from src.brief.generate import CLIENT_TIMEOUT_SEC, MODEL, SYSTEM_PROMPT, generat
 from src.brief.snapshot import BriefSnapshot
 
 SCOPES = ("default_assumptions", "all", "off")
-DEFAULT_SCOPE = "default_assumptions"
+DEFAULT_SCOPE = "off"  # paid AI is opt-in: BRIEF_AI_SCOPE must be set to turn it on
 DEFAULT_DAILY_CAP = 20
 DEFAULT_COOLDOWN_SEC = 900
 CACHE_MAX = 256
@@ -48,8 +52,12 @@ class BriefSettings:
     def from_env(cls, env: Mapping[str, str] | None = None) -> "BriefSettings":
         env = os.environ if env is None else env
         issues: list[str] = []
-        scope = (env.get("BRIEF_AI_SCOPE") or DEFAULT_SCOPE).strip().lower()
-        if scope not in SCOPES:
+        raw_scope = (env.get("BRIEF_AI_SCOPE") or "").strip().lower()
+        if not raw_scope:
+            scope = DEFAULT_SCOPE  # unset/empty is a normal state, not an issue
+        elif raw_scope in SCOPES:
+            scope = raw_scope
+        else:
             issues.append("BRIEF_AI_SCOPE")
             scope = "off"  # fail closed: a typo in the kill switch must not turn the AI on
 

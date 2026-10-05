@@ -87,13 +87,23 @@ def ask(g, snap, bp=100, thr=48, ip=None):
 
 def test_settings_defaults_and_invalid_values():
     d = BriefSettings.from_env({})
-    assert (d.scope, d.daily_cap, d.cooldown_sec, d.ip_header, d.issues) == ("default_assumptions", 20, 900, None, ())
+    assert (d.scope, d.daily_cap, d.cooldown_sec, d.ip_header, d.issues) == ("off", 20, 900, None, ())
     bad = BriefSettings.from_env({"BRIEF_AI_SCOPE": "yes", "BRIEF_DAILY_CAP": "-3", "BRIEF_COOLDOWN_SEC": "abc"})
     assert (bad.scope, bad.daily_cap, bad.cooldown_sec) == ("off", 0, 900)  # unknown scope fails closed
     assert set(bad.issues) == {"BRIEF_AI_SCOPE", "BRIEF_DAILY_CAP", "BRIEF_COOLDOWN_SEC"}
     assert BriefSettings.from_env({"BRIEF_DAILY_CAP": "xyz"}).daily_cap == 0
     ok = BriefSettings.from_env({"BRIEF_AI_SCOPE": "OFF", "BRIEF_DAILY_CAP": "0", "BRIEF_IP_HEADER": " X-Forwarded-For "})
     assert (ok.scope, ok.daily_cap, ok.ip_header, ok.issues) == ("off", 0, "X-Forwarded-For", ())
+
+
+def test_scope_unset_defaults_off_and_values_as_given():
+    for env in ({}, {"BRIEF_AI_SCOPE": ""}, {"BRIEF_AI_SCOPE": "   "}):
+        s = BriefSettings.from_env(env)
+        assert s.scope == "off" and s.issues == ()  # unset/empty/whitespace: off, and not an error
+    assert BriefSettings.from_env({"BRIEF_AI_SCOPE": "default_assumptions"}).scope == "default_assumptions"
+    assert BriefSettings.from_env({"BRIEF_AI_SCOPE": "ALL "}).scope == "all"
+    typo = BriefSettings.from_env({"BRIEF_AI_SCOPE": "offf"})
+    assert typo.scope == "off" and typo.issues == ("BRIEF_AI_SCOPE",)
 
 
 # ---- scope and key ------------------------------------------------------------
