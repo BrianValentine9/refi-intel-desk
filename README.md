@@ -109,7 +109,7 @@ harness verifies every quoted rate, count, and median against the snapshot befor
 
 ## Live demo (Step 6)
 
-**Live URL:** _pin after deploy — use subdomain `trigger-ladder` → `https://trigger-ladder.streamlit.app`_
+**Live URL:** **<https://trigger-ladder.streamlit.app>** — public on Streamlit Community Cloud. It ships with `data/seed.db`, so the desk loads on first visit (free-tier apps may take ~30s to wake from sleep).
 
 Deploy once (about five minutes):
 
@@ -147,7 +147,7 @@ All data comes from **public sources only** — FRED (Federal Reserve) and Fredd
 - [x] **Step 3** — Analysis core (NTB, recoupment, trigger ladder)
 - [x] **Step 4** — Streamlit dashboard + screenshot
 - [x] **Step 5** — AI morning brief + eval harness
-- [ ] **Step 6** — Live deployment + link (deploy-ready: seed DB + Cloud boot; pin URL after share.streamlit.io)
+- [x] **Step 6** — Live deployment + link — [trigger-ladder.streamlit.app](https://trigger-ladder.streamlit.app) (public on Streamlit Cloud, seed-DB boot)
 
 ## About
 
